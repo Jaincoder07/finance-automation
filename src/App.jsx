@@ -368,6 +368,7 @@ export default function FinanceApp() {
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [showCreditNoteModal, setShowCreditNoteModal] = useState(false);
+  const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [selectedRow, setSelectedRow] = useState(null);
   const [emailMode, setEmailMode] = useState('reply');
   const [newEmailInput, setNewEmailInput] = useState('');
@@ -1035,24 +1036,48 @@ export default function FinanceApp() {
       const sheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
       
+      // Create a Set of existing campaign keys for duplicate checking
+      const existingKeys = new Set(
+        masterData.map(row => `${row.date}|${row.partyName}|${row.senderName}|${row.subject}`.toLowerCase())
+      );
+      
+      let duplicateCount = 0;
+      let addedCount = 0;
+      
       const processedData = data.map((row, index) => {
         const campaignName = row['CAMPAIGN NAME'] || row['Campaign Name'] || '';
         const extractedEmail = extractEmail(campaignName);
         let dateValue = row['DATE'] || row['Date'] || new Date();
         if (typeof dateValue === 'string') dateValue = new Date(dateValue);
         const partyName = (row['PARTY NAME'] || row['Party Name'] || '').trim();
+        const senderName = row['SENDER NAME'] || row['Sender Name'] || '';
+        const subject = row['SUBJECT'] || row['Subject'] || '';
         const defaultAmount = invoiceValues[partyName] || '';
+        const dateStr = dateValue instanceof Date && !isNaN(dateValue) ? dateValue.toISOString().split('T')[0] : '';
+        
+        // Create unique key for this campaign
+        const campaignKey = `${dateStr}|${partyName}|${senderName}|${subject}`.toLowerCase();
+        
+        // Check if this campaign already exists
+        if (existingKeys.has(campaignKey)) {
+          duplicateCount++;
+          return null; // Skip duplicate
+        }
+        
+        // Add to existing keys to prevent duplicates within the same upload
+        existingKeys.add(campaignKey);
+        addedCount++;
         
         return {
           id: Date.now() + index + Math.random(),
           sno: row['SNO'] || row['SNO.'] || row['Sno'] || index + 1,
-          date: dateValue instanceof Date && !isNaN(dateValue) ? dateValue.toISOString().split('T')[0] : '',
+          date: dateStr,
           month: row['Month'] || row['MONTH'] || '',
           statePartyDetails: row['State/Party Details'] || row['STATE/PARTY DETAILS'] || '',
           partyName: partyName,
-          senderName: row['SENDER NAME'] || row['Sender Name'] || '',
+          senderName: senderName,
           campaignName: campaignName,
-          subject: row['SUBJECT'] || row['Subject'] || '',
+          subject: subject,
           emailId: extractedEmail,
           additionalEmails: [],
           toBeBilled: 'Not Yet',
@@ -1067,18 +1092,50 @@ export default function FinanceApp() {
           mailerUploaded: false,
           editComments: ''
         };
-      });
+      }).filter(row => row !== null); // Remove null entries (duplicates)
       
-      setMasterData(prev => [...prev, ...processedData]);
-      const newParties = [...new Set(processedData.map(r => r.partyName))];
-      setExpandedParties(prev => {
-        const newSet = new Set(prev);
-        newParties.forEach(p => newSet.add(p));
-        return newSet;
-      });
+      if (processedData.length > 0) {
+        setMasterData(prev => [...prev, ...processedData]);
+        const newParties = [...new Set(processedData.map(r => r.partyName))];
+        setExpandedParties(prev => {
+          const newSet = new Set(prev);
+          newParties.forEach(p => newSet.add(p));
+          return newSet;
+        });
+      }
+      
+      // Show summary message
+      let message = `✅ Upload Complete!\n\n`;
+      message += `• ${addedCount} new campaigns added\n`;
+      if (duplicateCount > 0) {
+        message += `• ${duplicateCount} duplicate entries skipped`;
+      }
+      alert(message);
     };
     reader.readAsBinaryString(file);
     e.target.value = '';
+  };
+
+  // Clear Master Data Function (clears campaigns, invoices, receipts, ledger entries)
+  const clearMasterData = async () => {
+    setMasterData([]);
+    setLedgerEntries([]);
+    setReceipts([]);
+    setCreditNotes([]);
+    setMailerImages({});
+    setOpeningBalances({});
+    setNextInvoiceNo(1);
+    setNextCombineNo(1);
+    setNextReceiptNo(1);
+    setNextCreditNoteNo(1);
+    setSelectedParty(null);
+    setExpandedParties(new Set());
+    
+    // Save to Firebase
+    await saveDataToFirebase();
+    
+    setShowClearDataModal(false);
+    alert('✅ All master data, invoices, receipts, and ledger entries have been cleared!');
   };
 
   // ============================================
@@ -1655,6 +1712,9 @@ ${generateInvoiceHtml(row)}
           <div style={{ display: 'flex', gap: '10px' }}>
             <input type="file" ref={excelInputRef} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleExcelUpload} />
             <ActionButton icon={Upload} label="Upload Data" variant="brand" onClick={() => excelInputRef.current?.click()} />
+            {canEdit && masterData.length > 0 && (
+              <ActionButton icon={Trash2} label="Clear All Data" variant="danger" onClick={() => setShowClearDataModal(true)} />
+            )}
           </div>
         </div>
 
@@ -2110,7 +2170,27 @@ ${generateInvoiceHtml(row)}
           )}
         </Card>
         <Card title="🗑️ Data Management">
-          <ActionButton icon={Trash2} label="Clear All Data" variant="danger" onClick={() => { if (confirm('Delete ALL data?')) { setMasterData([]); setLedgerEntries([]); setMailerImages({}); setNextInvoiceNo(1); setNextCombineNo(1); setOpeningBalances({}); setInvoiceValues({}); } }} />
+          <div style={{ padding: '16px', backgroundColor: '#FEF2F2', borderRadius: '10px', border: '1px solid #FCA5A5', marginBottom: '16px' }}>
+            <div style={{ fontWeight: '700', color: '#991B1B', fontSize: '14px', marginBottom: '8px' }}>⚠️ Danger Zone</div>
+            <div style={{ fontSize: '13px', color: '#7F1D1D', marginBottom: '16px' }}>
+              This will permanently delete all data including:
+              <ul style={{ margin: '8px 0 0 16px', padding: 0 }}>
+                <li>All campaigns and master data</li>
+                <li>All invoices and receipts</li>
+                <li>All ledger entries</li>
+                <li>All mailer images</li>
+                <li>Opening balances and settings</li>
+              </ul>
+            </div>
+            <ActionButton icon={Trash2} label="Clear All Data" variant="danger" onClick={() => setShowClearDataModal(true)} />
+          </div>
+          <div style={{ fontSize: '12px', color: '#64748B' }}>
+            <strong>Current Data:</strong><br />
+            • {masterData.length} campaigns<br />
+            • {ledgerEntries.length} ledger entries<br />
+            • {receipts.length} receipts<br />
+            • {Object.keys(mailerImages).length} mailer images
+          </div>
         </Card>
       </div>
     </div>
@@ -2609,6 +2689,40 @@ ${generateInvoiceHtml(row)}
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Clear Data Confirmation Modal */}
+      <Modal isOpen={showClearDataModal} onClose={() => setShowClearDataModal(false)} title="🗑️ Clear All Data" width="500px">
+        <div>
+          <div style={{ backgroundColor: '#FEE2E2', padding: '20px', borderRadius: '12px', marginBottom: '20px', border: '2px solid #FCA5A5' }}>
+            <div style={{ fontWeight: '700', color: '#991B1B', fontSize: '18px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <AlertCircle size={24} /> Warning: This action cannot be undone!
+            </div>
+            <div style={{ fontSize: '14px', color: '#7F1D1D', lineHeight: '1.6' }}>
+              This will permanently delete:
+              <ul style={{ margin: '12px 0 0 20px', padding: 0 }}>
+                <li><strong>{masterData.length}</strong> campaigns from Master Sheet</li>
+                <li><strong>{masterData.filter(r => r.invoiceGenerated).length}</strong> generated invoices</li>
+                <li><strong>{receipts.length}</strong> receipts</li>
+                <li><strong>{creditNotes.length}</strong> credit notes</li>
+                <li><strong>{ledgerEntries.length}</strong> ledger entries</li>
+                <li><strong>{Object.keys(mailerImages).length}</strong> mailer images</li>
+                <li>All opening balances</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div style={{ backgroundColor: '#FEF3C7', padding: '14px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #FCD34D' }}>
+            <div style={{ fontSize: '13px', color: '#92400E' }}>
+              <strong>Note:</strong> Invoice series numbers will be reset to 1. Your company settings and mailer logo will be preserved.
+            </div>
+          </div>
+          
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
+            <ActionButton label="Cancel" onClick={() => setShowClearDataModal(false)} />
+            <ActionButton label="Yes, Clear All Data" variant="danger" icon={Trash2} onClick={clearMasterData} />
+          </div>
+        </div>
       </Modal>
     </>
   );
