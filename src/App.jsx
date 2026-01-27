@@ -2713,6 +2713,3 @@ ${generateInvoiceHtml(row)}
     </div>
   );
 }
-    </div>
-  );
-}
