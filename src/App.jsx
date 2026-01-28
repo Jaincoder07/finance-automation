@@ -677,9 +677,16 @@ export default function FinanceApp() {
   // ============================================
   
   const parties = useMemo(() => {
-    const uniqueParties = [...new Set(masterData.map(r => r.partyName))];
-    return uniqueParties.filter(Boolean);
-  }, [masterData]);
+    // Combine parties from: masterData, partyMaster, ledgerEntries, openingBalances
+    const masterParties = masterData.map(r => r.partyName);
+    const partyMasterParties = Object.keys(partyMaster);
+    const ledgerParties = ledgerEntries.map(e => e.partyName);
+    const openingBalanceParties = Object.keys(openingBalances);
+    
+    const allParties = [...masterParties, ...partyMasterParties, ...ledgerParties, ...openingBalanceParties];
+    const uniqueParties = [...new Set(allParties)];
+    return uniqueParties.filter(Boolean).sort();
+  }, [masterData, partyMaster, ledgerEntries, openingBalances]);
 
   const combinationCodes = useMemo(() => {
     const codes = [...new Set(masterData.filter(r => r.combinationCode && r.combinationCode !== 'NA').map(r => r.combinationCode))];
@@ -1288,6 +1295,13 @@ export default function FinanceApp() {
   const handleHistoricalLedgerUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    if (!selectedParty) {
+      alert('⚠️ Please select a party first from the list, then import their historical ledger.');
+      e.target.value = '';
+      return;
+    }
+    
     const reader = new FileReader();
     reader.onload = (event) => {
       const workbook = XLSX.read(event.target.result, { type: 'binary', cellDates: true });
@@ -1298,78 +1312,102 @@ export default function FinanceApp() {
       const newLedgerEntries = [];
       let addedCount = 0;
       
+      // Debug: log first few rows
+      console.log('Uploaded data sample:', data.slice(0, 5));
+      
       data.forEach((row, index) => {
-        // Parse date
-        let dateValue = row['Date'] || row['DATE'] || '';
-        if (typeof dateValue === 'string' && dateValue) {
-          // Try to parse various date formats
+        // Parse date - handle various formats
+        let dateValue = row['Date'] || row['DATE'] || row['date'] || '';
+        
+        if (typeof dateValue === 'string' && dateValue.trim()) {
+          dateValue = dateValue.trim();
+          // Try to parse DD-MMM-YY format (e.g., "02-Jun-21")
           const parts = dateValue.split(/[-\/]/);
           if (parts.length === 3) {
-            // Handle DD-MMM-YY or DD-Mon-YY format
             const months = { 'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06', 
                            'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12' };
-            if (months[parts[1].toLowerCase().substring(0, 3)]) {
+            const monthKey = parts[1].toLowerCase().substring(0, 3);
+            if (months[monthKey]) {
+              const day = parts[0].padStart(2, '0');
               const year = parts[2].length === 2 ? (parseInt(parts[2]) > 50 ? '19' + parts[2] : '20' + parts[2]) : parts[2];
-              dateValue = `${year}-${months[parts[1].toLowerCase().substring(0, 3)]}-${parts[0].padStart(2, '0')}`;
+              dateValue = `${year}-${months[monthKey]}-${day}`;
             }
           }
         }
         
-        const particular = row['Particular'] || row['PARTICULAR'] || row['Particulars'] || row['PARTICULARS'] || '';
-        const vchType = row['Vch Type'] || row['VCH TYPE'] || row['Voucher Type'] || '';
-        const vchNo = row['Vch No.'] || row['VCH NO.'] || row['Voucher No'] || row['Invoice No'] || '';
-        const debit = parseFloat(row['Debit'] || row['DEBIT'] || 0) || 0;
-        const credit = parseFloat(row['Credit'] || row['CREDIT'] || 0) || 0;
+        const particular = (row['Particular'] || row['PARTICULAR'] || row['Particulars'] || row['PARTICULARS'] || '').trim();
+        const vchType = (row['Vch Type'] || row['VCH TYPE'] || row['Voucher Type'] || row['vch type'] || '').trim();
+        const vchNo = (row['Vch No.'] || row['VCH NO.'] || row['Voucher No'] || row['Invoice No'] || row['Vch No'] || row['vch no.'] || '').trim();
+        
+        // Parse numbers - handle formatted numbers with commas
+        const parseNumber = (val) => {
+          if (!val) return 0;
+          const str = String(val).replace(/,/g, '').replace(/[^\d.-]/g, '');
+          return parseFloat(str) || 0;
+        };
+        
+        const debit = parseNumber(row['Debit'] || row['DEBIT'] || row['debit']);
+        const credit = parseNumber(row['Credit'] || row['CREDIT'] || row['credit']);
         const receiptDate = row['Date of Receipt'] || row['DATE OF RECEIPT'] || row['Receipt Date'] || '';
-        const amountReceived = parseFloat(row['Amount Received'] || row['AMOUNT RECEIVED'] || 0) || 0;
-        const tdsReceived = parseFloat(row['TDS amount Received'] || row['TDS Received'] || row['TDS'] || 0) || 0;
-        const balance = parseFloat(row['Balance'] || row['BALANCE'] || 0) || 0;
-        const paymentStatus = row['Payment Status'] || row['PAYMENT STATUS'] || row['Status'] || '';
+        const amountReceived = parseNumber(row['Amount Received'] || row['AMOUNT RECEIVED'] || row['amount received']);
+        const tdsReceived = parseNumber(row['TDS amount Received'] || row['TDS Received'] || row['TDS'] || row['tds']);
+        const balance = parseNumber(row['Balance'] || row['BALANCE'] || row['balance']);
+        const paymentStatus = (row['Payment Status'] || row['PAYMENT STATUS'] || row['Status'] || row['status'] || '').trim();
         
-        // Skip sub-rows (rows without date that are line item details)
-        if (!dateValue && (particular.includes('PROMOTIONAL') || particular.includes('IGST') || particular.includes('CGST') || particular.includes('SGST'))) {
-          return;
+        // Skip sub-rows (rows without date that contain line item details)
+        const isSubRow = !dateValue && (
+          particular.toUpperCase().includes('PROMOTIONAL') || 
+          particular.toUpperCase().includes('IGST') || 
+          particular.toUpperCase().includes('CGST') || 
+          particular.toUpperCase().includes('SGST') ||
+          particular.toUpperCase().includes('TRADE EMAILER')
+        );
+        
+        if (isSubRow) {
+          return; // Skip sub-rows
         }
         
-        // Skip if no meaningful data
-        if (!particular && !vchNo) return;
-        
-        // Determine entry type
-        let entryType = 'historical';
-        if (vchType.toLowerCase().includes('credit note')) {
-          entryType = 'creditnote';
-        } else if (vchType.toLowerCase().includes('receipt') || amountReceived > 0) {
-          entryType = 'receipt';
-        } else if (vchType.toLowerCase().includes('sale') || debit > 0) {
-          entryType = 'invoice';
+        // Accept row if it has a valid date AND either vchNo, debit, or credit
+        if (dateValue && (vchNo || debit > 0 || credit > 0)) {
+          // Determine entry type
+          let entryType = 'invoice';
+          if (vchType.toLowerCase().includes('credit note') || vchNo.toUpperCase().startsWith('CN')) {
+            entryType = 'creditnote';
+          } else if (vchType.toLowerCase().includes('receipt')) {
+            entryType = 'receipt';
+          } else if (vchType.toLowerCase().includes('sale') || debit > 0) {
+            entryType = 'invoice';
+          }
+          
+          newLedgerEntries.push({
+            id: Date.now() + index,
+            partyName: selectedParty, // Always use the selected party
+            date: dateValue,
+            particulars: particular || selectedParty,
+            narration: vchNo,
+            vchType: vchType || 'Sales',
+            vchNo: vchNo,
+            debit: debit,
+            credit: credit,
+            receiptDate: receiptDate,
+            amountReceived: amountReceived,
+            tdsReceived: tdsReceived,
+            balance: balance,
+            paymentStatus: paymentStatus,
+            type: entryType,
+            isHistorical: true
+          });
+          addedCount++;
         }
-        
-        newLedgerEntries.push({
-          id: Date.now() + index,
-          partyName: particular || selectedParty,
-          date: dateValue,
-          particulars: particular,
-          narration: `${vchNo}${paymentStatus ? ' - ' + paymentStatus : ''}`,
-          vchType: vchType,
-          vchNo: vchNo,
-          debit: debit,
-          credit: credit,
-          receiptDate: receiptDate,
-          amountReceived: amountReceived,
-          tdsReceived: tdsReceived,
-          balance: balance,
-          paymentStatus: paymentStatus,
-          type: entryType,
-          isHistorical: true
-        });
-        addedCount++;
       });
+      
+      console.log('Parsed entries:', newLedgerEntries);
       
       if (addedCount > 0) {
         setLedgerEntries(prev => [...prev, ...newLedgerEntries]);
-        alert(`✅ Historical Ledger Uploaded!\n\n${addedCount} entries added for ${selectedParty || 'all parties'}.`);
+        alert(`✅ Historical Ledger Uploaded!\n\n${addedCount} entries added for "${selectedParty}".`);
       } else {
-        alert('⚠️ No valid ledger entries found in the file.');
+        alert(`⚠️ No valid ledger entries found in the file.\n\nMake sure your file has these columns:\n• Date (e.g., 02-Jun-21)\n• Vch Type (e.g., Sales, Credit Note)\n• Vch No. (e.g., MB/2022-23/128)\n• Debit or Credit amount`);
       }
     };
     reader.readAsBinaryString(file);
@@ -3006,7 +3044,14 @@ ${generateInvoiceHtml(row)}
       
       const opening = openingBalances[selectedParty] || 0;
       
-      // Get all invoices for this party
+      // Helper to extract invoice number suffix (e.g., "128" from "MB/2022-23/128" or "CN/2022-23/128")
+      const getInvoiceSuffix = (vchNo) => {
+        if (!vchNo) return '';
+        const parts = vchNo.split('/');
+        return parts[parts.length - 1];
+      };
+      
+      // Get all invoices for this party from masterData (new system)
       const partyInvoices = masterData.filter(r => 
         r.partyName === selectedParty && 
         r.invoiceGenerated && 
@@ -3025,20 +3070,38 @@ ${generateInvoiceHtml(row)}
             receiptStatus: row.receiptStatus,
             receiptNo: row.receiptNo,
             receiptDate: row.receiptDate,
-            campaigns: [row]
+            campaigns: [row],
+            isFromMaster: true
           });
         } else {
           invoiceMap.get(row.invoiceNo).campaigns.push(row);
         }
       });
       
+      // Get historical entries for this party
+      const historicalEntries = ledgerEntries.filter(e => 
+        e.partyName === selectedParty && e.isHistorical
+      );
+      
       // Get receipts for this party
       const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
       
-      // Get credit notes for this party
-      const partyCreditNotes = ledgerEntries.filter(e => 
-        e.partyName === selectedParty && e.type === 'creditnote'
+      // Get all credit notes for this party (both from system and historical)
+      const allCreditNotes = ledgerEntries.filter(e => 
+        e.partyName === selectedParty && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
+      
+      // Create a map of credit notes by their suffix for matching
+      const creditNoteMap = new Map();
+      allCreditNotes.forEach(cn => {
+        const suffix = getInvoiceSuffix(cn.vchNo || cn.creditNoteNo);
+        if (suffix) {
+          if (!creditNoteMap.has(suffix)) {
+            creditNoteMap.set(suffix, []);
+          }
+          creditNoteMap.get(suffix).push(cn);
+        }
+      });
       
       // Build ledger entries
       const entries = [];
@@ -3070,93 +3133,187 @@ ${generateInvoiceHtml(row)}
         totalCredit += opening < 0 ? Math.abs(opening) : 0;
       }
       
-      // Convert to array and sort by date
-      const allInvoices = Array.from(invoiceMap.values())
+      // Combine all entries (from masterData and historical) and sort by date
+      const allEntries = [];
+      
+      // Add invoices from masterData
+      Array.from(invoiceMap.values())
         .filter(inv => {
           const invDate = new Date(inv.invoiceDate);
           const fromDate = new Date(ledgerPeriod.fromDate);
           const toDate = new Date(ledgerPeriod.toDate);
           return invDate >= fromDate && invDate <= toDate;
         })
-        .sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate));
+        .forEach(inv => {
+          allEntries.push({ ...inv, entryType: 'invoice', sortDate: inv.invoiceDate });
+        });
       
-      // Process each invoice
-      allInvoices.forEach(inv => {
-        // Calculate amounts
-        let baseAmount = 0;
-        inv.campaigns.forEach(c => {
-          baseAmount += parseFloat(c.invoiceAmount) || 0;
+      // Add historical entries
+      historicalEntries
+        .filter(e => {
+          if (!e.date) return false;
+          const entryDate = new Date(e.date);
+          const fromDate = new Date(ledgerPeriod.fromDate);
+          const toDate = new Date(ledgerPeriod.toDate);
+          return entryDate >= fromDate && entryDate <= toDate;
+        })
+        .forEach(e => {
+          allEntries.push({ ...e, entryType: e.type, sortDate: e.date });
         });
-        
-        // Check if same state (Maharashtra)
-        const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
-        const cgst = isSameState ? baseAmount * 0.09 : 0;
-        const sgst = isSameState ? baseAmount * 0.09 : 0;
-        const igst = isSameState ? 0 : baseAmount * 0.18;
-        const totalTax = cgst + sgst + igst;
-        const totalAmount = baseAmount + totalTax;
-        
-        // Get receipt info for this invoice
-        const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
-        
-        runningBalance += totalAmount;
-        totalDebit += totalAmount;
-        
-        // Sub-rows for base amount and tax
-        const subRows = [
-          { particular: 'PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), credit: baseAmount },
-        ];
-        
-        if (isSameState) {
-          subRows.push({ particular: 'CGST', credit: cgst });
-          subRows.push({ particular: 'SGST', credit: sgst });
-        } else {
-          subRows.push({ particular: 'IGST', credit: igst });
-        }
-        
-        // Determine payment status
-        let paymentStatus = '';
-        let amountReceived = 0;
-        let tdsReceived = 0;
-        let receiptDate = '';
-        
-        if (invoiceReceipt) {
-          paymentStatus = 'Received';
-          amountReceived = invoiceReceipt.amount || 0;
-          tdsReceived = invoiceReceipt.tds || 0;
-          receiptDate = invoiceReceipt.date;
-          totalReceived += amountReceived;
-          totalTds += tdsReceived;
+      
+      // Sort all by date
+      allEntries.sort((a, b) => new Date(a.sortDate) - new Date(b.sortDate));
+      
+      // Process each entry
+      allEntries.forEach(entry => {
+        if (entry.isFromMaster) {
+          // Process invoice from masterData
+          const inv = entry;
+          let baseAmount = 0;
+          inv.campaigns.forEach(c => {
+            baseAmount += parseFloat(c.invoiceAmount) || 0;
+          });
           
-          // Reduce balance by receipt
-          runningBalance -= (amountReceived + tdsReceived + (invoiceReceipt.discount || 0));
-        } else if (inv.receiptStatus === 'Received') {
-          paymentStatus = 'Received';
-        } else {
-          paymentStatus = 'Pending';
+          const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const cgst = isSameState ? baseAmount * 0.09 : 0;
+          const sgst = isSameState ? baseAmount * 0.09 : 0;
+          const igst = isSameState ? 0 : baseAmount * 0.18;
+          const totalAmount = baseAmount + cgst + sgst + igst;
+          
+          // Check for matching credit note
+          const invSuffix = getInvoiceSuffix(inv.invoiceNo);
+          const matchingCNs = creditNoteMap.get(invSuffix) || [];
+          const matchingCN = matchingCNs.find(cn => cn.partyName === selectedParty);
+          
+          // Get receipt info for this invoice
+          const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
+          
+          runningBalance += totalAmount;
+          totalDebit += totalAmount;
+          
+          // Sub-rows for base amount and tax
+          const subRows = [
+            { particular: 'PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), credit: baseAmount },
+          ];
+          
+          if (isSameState) {
+            subRows.push({ particular: 'CGST', credit: cgst });
+            subRows.push({ particular: 'SGST', credit: sgst });
+          } else {
+            subRows.push({ particular: 'IGST', credit: igst });
+          }
+          
+          // Determine payment status
+          let paymentStatus = '';
+          let amountReceived = 0;
+          let tdsReceived = 0;
+          let receiptDate = '';
+          let isCNAdjusted = false;
+          let cnDifference = 0;
+          
+          if (matchingCN) {
+            const cnAmount = matchingCN.credit || parseFloat(matchingCN.debit) || 0;
+            if (Math.abs(cnAmount - totalAmount) < 1) {
+              // Full credit note - amounts match
+              paymentStatus = 'CN Adjusted';
+              isCNAdjusted = true;
+              runningBalance -= totalAmount;
+            } else {
+              // Partial credit note
+              cnDifference = totalAmount - cnAmount;
+              paymentStatus = 'CN Partial';
+              isCNAdjusted = true;
+              runningBalance -= cnAmount;
+            }
+          } else if (invoiceReceipt) {
+            paymentStatus = 'Received';
+            amountReceived = invoiceReceipt.amount || 0;
+            tdsReceived = invoiceReceipt.tds || 0;
+            receiptDate = invoiceReceipt.date;
+            totalReceived += amountReceived;
+            totalTds += tdsReceived;
+            runningBalance -= (amountReceived + tdsReceived + (invoiceReceipt.discount || 0));
+          } else if (inv.receiptStatus === 'Received') {
+            paymentStatus = 'Received';
+          } else {
+            paymentStatus = 'Pending';
+          }
+          
+          entries.push({
+            id: inv.invoiceNo,
+            date: inv.invoiceDate,
+            particular: selectedParty,
+            vchType: 'Sales',
+            vchNo: inv.invoiceNo,
+            debit: totalAmount,
+            credit: 0,
+            receiptDate: receiptDate,
+            amountReceived: amountReceived,
+            tdsReceived: tdsReceived,
+            balance: isCNAdjusted ? cnDifference : (paymentStatus === 'Received' ? 0 : totalAmount - amountReceived - tdsReceived),
+            paymentStatus: paymentStatus,
+            isInvoice: true,
+            isCNAdjusted: isCNAdjusted,
+            subRows: subRows
+          });
+        } else if (entry.isHistorical && entry.type !== 'creditnote') {
+          // Process historical entry (not credit notes - they're processed with invoices)
+          const debit = entry.debit || 0;
+          const credit = entry.credit || 0;
+          
+          // Check for matching credit note for historical invoices
+          const invSuffix = getInvoiceSuffix(entry.vchNo);
+          const matchingCNs = creditNoteMap.get(invSuffix) || [];
+          const matchingCN = matchingCNs.find(cn => cn.partyName === selectedParty && cn.id !== entry.id);
+          
+          let paymentStatus = entry.paymentStatus || '';
+          let isCNAdjusted = false;
+          let balanceAmount = entry.balance || 0;
+          
+          if (matchingCN && entry.type === 'invoice') {
+            const cnAmount = matchingCN.credit || 0;
+            if (Math.abs(cnAmount - debit) < 1) {
+              paymentStatus = 'CN Adjusted';
+              isCNAdjusted = true;
+              balanceAmount = 0;
+            } else if (cnAmount > 0) {
+              paymentStatus = 'CN Partial';
+              isCNAdjusted = true;
+              balanceAmount = debit - cnAmount;
+            }
+          }
+          
+          runningBalance += debit - credit;
+          totalDebit += debit;
+          totalCredit += credit;
+          if (entry.amountReceived) totalReceived += entry.amountReceived;
+          if (entry.tdsReceived) totalTds += entry.tdsReceived;
+          
+          entries.push({
+            id: entry.id,
+            date: entry.date,
+            particular: entry.particulars || selectedParty,
+            vchType: entry.vchType || 'Sales',
+            vchNo: entry.vchNo,
+            debit: debit,
+            credit: credit,
+            receiptDate: entry.receiptDate || '',
+            amountReceived: entry.amountReceived || 0,
+            tdsReceived: entry.tdsReceived || 0,
+            balance: balanceAmount,
+            paymentStatus: paymentStatus,
+            isInvoice: entry.type === 'invoice',
+            isHistorical: true,
+            isCNAdjusted: isCNAdjusted,
+            subRows: []
+          });
         }
-        
-        entries.push({
-          id: inv.invoiceNo,
-          date: inv.invoiceDate,
-          particular: selectedParty,
-          vchType: 'Sales',
-          vchNo: inv.invoiceNo,
-          debit: totalAmount,
-          credit: 0,
-          receiptDate: receiptDate,
-          amountReceived: amountReceived,
-          tdsReceived: tdsReceived,
-          balance: paymentStatus === 'Received' ? 0 : totalAmount - amountReceived - tdsReceived,
-          paymentStatus: paymentStatus,
-          isInvoice: true,
-          subRows: subRows
-        });
       });
       
-      // Process credit notes
-      partyCreditNotes
+      // Add credit notes that weren't matched (standalone credit notes)
+      allCreditNotes
         .filter(cn => {
+          if (!cn.date) return false;
           const cnDate = new Date(cn.date);
           const fromDate = new Date(ledgerPeriod.fromDate);
           const toDate = new Date(ledgerPeriod.toDate);
@@ -3164,44 +3321,59 @@ ${generateInvoiceHtml(row)}
         })
         .sort((a, b) => new Date(a.date) - new Date(b.date))
         .forEach(cn => {
-          const cnAmount = cn.credit || 0;
-          runningBalance -= cnAmount;
-          totalCredit += cnAmount;
+          // Check if this CN was already processed with a matching invoice
+          const cnSuffix = getInvoiceSuffix(cn.vchNo || cn.creditNoteNo);
+          const hasMatchingInvoice = entries.some(e => 
+            e.isCNAdjusted && getInvoiceSuffix(e.vchNo) === cnSuffix
+          );
           
-          // Find original invoice to get tax breakdown
-          const originalInvoice = masterData.find(r => r.invoiceNo === cn.invoiceNo);
-          const isSameState = originalInvoice?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
-          const baseAmount = cnAmount / 1.18;
-          const taxAmount = cnAmount - baseAmount;
-          
-          const subRows = [
-            { particular: 'PROMOTIONAL TRADE EMAILER' + (originalInvoice?.invoiceType === 'Combined' ? 'S' : ''), debit: -baseAmount },
-          ];
-          
-          if (isSameState) {
-            subRows.push({ particular: 'CGST', debit: -taxAmount / 2 });
-            subRows.push({ particular: 'SGST', debit: -taxAmount / 2 });
-          } else {
-            subRows.push({ particular: 'IGST', debit: -taxAmount });
+          if (!hasMatchingInvoice) {
+            // Standalone credit note - add it
+            const cnAmount = cn.credit || 0;
+            runningBalance -= cnAmount;
+            totalCredit += cnAmount;
+            
+            const originalInvoice = masterData.find(r => r.invoiceNo === cn.invoiceNo);
+            const isSameState = originalInvoice?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+            const baseAmount = cnAmount / 1.18;
+            const taxAmount = cnAmount - baseAmount;
+            
+            const subRows = [
+              { particular: 'PROMOTIONAL TRADE EMAILER', debit: -baseAmount },
+            ];
+            
+            if (isSameState) {
+              subRows.push({ particular: 'CGST', debit: -taxAmount / 2 });
+              subRows.push({ particular: 'SGST', debit: -taxAmount / 2 });
+            } else {
+              subRows.push({ particular: 'IGST', debit: -taxAmount });
+            }
+            
+            entries.push({
+              id: cn.id,
+              date: cn.date,
+              particular: selectedParty,
+              vchType: 'Credit Note',
+              vchNo: cn.vchNo || cn.creditNoteNo || `CN/${cn.invoiceNo?.replace('MB/', '')}`,
+              debit: 0,
+              credit: cnAmount,
+              receiptDate: '',
+              amountReceived: 0,
+              tdsReceived: 0,
+              balance: 0,
+              paymentStatus: '',
+              isCreditNote: true,
+              subRows: cn.isHistorical ? [] : subRows
+            });
           }
-          
-          entries.push({
-            id: cn.id,
-            date: cn.date,
-            particular: selectedParty,
-            vchType: 'Credit Note',
-            vchNo: cn.creditNoteNo || `CN/${cn.invoiceNo?.replace('MB/', '')}`,
-            debit: 0,
-            credit: cnAmount,
-            receiptDate: '',
-            amountReceived: 0,
-            tdsReceived: 0,
-            balance: 0,
-            paymentStatus: '',
-            isCreditNote: true,
-            subRows: subRows
-          });
         });
+      
+      // Sort entries by date
+      entries.sort((a, b) => {
+        if (a.isOpening) return -1;
+        if (b.isOpening) return 1;
+        return new Date(a.date) - new Date(b.date);
+      });
       
       return {
         entries,
@@ -3365,7 +3537,11 @@ ${generateInvoiceHtml(row)}
                         ledgerData.entries.map(entry => (
                           <React.Fragment key={entry.id}>
                             {/* Main Row */}
-                            <tr style={{ backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.isCreditNote ? '#FEF2F2' : '#FFFFFF'), borderBottom: '1px solid #E2E8F0' }}>
+                            <tr style={{ 
+                              backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.isCNAdjusted ? '#FFFBEB' : (entry.isCreditNote ? '#FEF2F2' : '#FFFFFF')), 
+                              borderBottom: '1px solid #E2E8F0',
+                              borderLeft: entry.isCNAdjusted ? '4px solid #F59E0B' : 'none'
+                            }}>
                               <td style={{ padding: '8px', borderRight: '1px solid #E2E8F0' }}>{entry.date ? formatDate(entry.date) : ''}</td>
                               <td style={{ padding: '8px', fontWeight: '600', color: entry.isCreditNote ? '#DC2626' : '#1E293B', borderRight: '1px solid #E2E8F0' }}>{entry.particular}</td>
                               <td style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #E2E8F0' }}>
@@ -3383,7 +3559,7 @@ ${generateInvoiceHtml(row)}
                                 )}
                               </td>
                               <td style={{ padding: '8px', borderRight: '1px solid #E2E8F0' }}>
-                                {entry.vchNo && entry.isInvoice ? (
+                                {entry.vchNo && entry.isInvoice && !entry.isHistorical ? (
                                   <button 
                                     onClick={() => viewInvoiceFromLedger(entry.vchNo)}
                                     style={{ 
@@ -3405,7 +3581,7 @@ ${generateInvoiceHtml(row)}
                                 )}
                               </td>
                               <td style={{ padding: '8px', textAlign: 'right', fontWeight: '600', borderRight: '1px solid #E2E8F0' }}>{entry.debit > 0 ? formatCurrencyShort(entry.debit) : ''}</td>
-                              <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}></td>
+                              <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}>{entry.credit > 0 ? formatCurrencyShort(entry.credit) : ''}</td>
                               <td style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #E2E8F0' }}>{entry.receiptDate ? formatDate(entry.receiptDate) : ''}</td>
                               <td style={{ padding: '8px', textAlign: 'right', color: '#059669', fontWeight: entry.amountReceived > 0 ? '600' : '400', borderRight: '1px solid #E2E8F0' }}>{entry.amountReceived > 0 ? formatCurrencyShort(entry.amountReceived) : ''}</td>
                               <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}>{entry.tdsReceived > 0 ? formatCurrencyShort(entry.tdsReceived) : ''}</td>
@@ -3419,8 +3595,11 @@ ${generateInvoiceHtml(row)}
                                     borderRadius: '4px', 
                                     fontSize: '10px', 
                                     fontWeight: '600',
-                                    backgroundColor: entry.paymentStatus === 'Received' ? '#DCFCE7' : '#FEF3C7',
-                                    color: entry.paymentStatus === 'Received' ? '#166534' : '#92400E'
+                                    backgroundColor: entry.paymentStatus === 'Received' ? '#DCFCE7' : 
+                                                   (entry.paymentStatus === 'CN Adjusted' ? '#FEF3C7' : 
+                                                   (entry.paymentStatus === 'CN Partial' ? '#FED7AA' : '#FEF3C7')),
+                                    color: entry.paymentStatus === 'Received' ? '#166534' : 
+                                          (entry.paymentStatus === 'CN Adjusted' || entry.paymentStatus === 'CN Partial' ? '#92400E' : '#92400E')
                                   }}>
                                     {entry.paymentStatus}
                                   </span>
@@ -4083,25 +4262,49 @@ ${generateInvoiceHtml(row)}
         {selectedParty && (
           <div style={{ padding: '12px', backgroundColor: '#DCFCE7', borderRadius: '8px', marginBottom: '16px', border: '1px solid #86EFAC' }}>
             <div style={{ fontSize: '13px', color: '#166534' }}>
-              <strong>Selected Party:</strong> {selectedParty}
+              <strong>✅ Selected Party:</strong> {selectedParty}
             </div>
             <div style={{ fontSize: '11px', color: '#15803D', marginTop: '4px' }}>
-              Entries will be imported for this party
+              All entries from the uploaded file will be imported for this party
             </div>
           </div>
         )}
         
         {!selectedParty && (
-          <div style={{ padding: '12px', backgroundColor: '#FEF3C7', borderRadius: '8px', marginBottom: '16px', border: '1px solid #FCD34D' }}>
-            <div style={{ fontSize: '13px', color: '#92400E' }}>
-              <strong>Tip:</strong> Select a party from the ledger list first, then import their historical data.
+          <div style={{ padding: '12px', backgroundColor: '#FEE2E2', borderRadius: '8px', marginBottom: '16px', border: '1px solid #FCA5A5' }}>
+            <div style={{ fontSize: '13px', color: '#991B1B' }}>
+              <strong>⚠️ No Party Selected</strong>
+            </div>
+            <div style={{ fontSize: '12px', color: '#B91C1C', marginTop: '4px' }}>
+              Please close this modal and select a party from the Parties list on the left, then click "Import Historical" again.
             </div>
           </div>
         )}
         
         <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '16px' }}>
           <ActionButton icon={Download} label="Download Template" variant="brand" onClick={downloadHistoricalLedgerTemplate} />
-          <ActionButton icon={Upload} label="Upload Ledger" variant="success" onClick={() => historicalLedgerInputRef.current?.click()} />
+          {selectedParty ? (
+            <ActionButton icon={Upload} label="Upload Ledger" variant="success" onClick={() => historicalLedgerInputRef.current?.click()} />
+          ) : (
+            <button 
+              disabled 
+              style={{ 
+                padding: '8px 16px', 
+                fontSize: '13px', 
+                fontWeight: '600', 
+                border: 'none', 
+                borderRadius: '8px', 
+                backgroundColor: '#E2E8F0', 
+                color: '#94A3B8', 
+                cursor: 'not-allowed',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px'
+              }}
+            >
+              <Upload size={16} /> Upload Ledger
+            </button>
+          )}
         </div>
         
         <div style={{ padding: '14px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
