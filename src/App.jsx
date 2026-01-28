@@ -2530,89 +2530,277 @@ ${generateInvoiceHtml(row)}
       return;
     }
     
-    const filteredLedger = partyLedger.filter(entry => {
-      if (entry.isOpening) return true;
-      const entryDate = new Date(entry.date);
-      const fromDate = new Date(ledgerPeriod.fromDate);
-      const toDate = new Date(ledgerPeriod.toDate);
-      return entryDate >= fromDate && entryDate <= toDate;
+    // Build the same ledger data as renderLedgers
+    const opening = openingBalances[selectedParty] || 0;
+    
+    // Get all invoices for this party
+    const partyInvoices = masterData.filter(r => 
+      r.partyName === selectedParty && 
+      r.invoiceGenerated && 
+      r.invoiceStatus === 'Approved'
+    );
+    
+    // Group by invoice number
+    const invoiceMap = new Map();
+    partyInvoices.forEach(row => {
+      if (!invoiceMap.has(row.invoiceNo)) {
+        invoiceMap.set(row.invoiceNo, {
+          invoiceNo: row.invoiceNo,
+          invoiceDate: row.invoiceDate,
+          invoiceType: row.invoiceType,
+          combinationCode: row.combinationCode,
+          receiptStatus: row.receiptStatus,
+          campaigns: [row]
+        });
+      } else {
+        invoiceMap.get(row.invoiceNo).campaigns.push(row);
+      }
     });
     
-    const closingBalance = filteredLedger.length > 0 ? filteredLedger[filteredLedger.length - 1].balance : 0;
+    const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
+    const partyCreditNotes = ledgerEntries.filter(e => e.partyName === selectedParty && e.type === 'creditnote');
+    
+    // Build rows for PDF
+    let pdfRows = [];
+    let totalDebit = 0;
+    let totalCredit = 0;
+    let totalReceived = 0;
+    let totalTds = 0;
+    let runningBalance = opening;
+    
+    // Opening balance
+    if (opening !== 0) {
+      totalDebit += opening > 0 ? opening : 0;
+      totalCredit += opening < 0 ? Math.abs(opening) : 0;
+      pdfRows.push({
+        date: '',
+        particular: 'Opening Balance',
+        vchType: '',
+        vchNo: '',
+        debit: opening > 0 ? opening : 0,
+        credit: opening < 0 ? Math.abs(opening) : 0,
+        receiptDate: '',
+        amountReceived: 0,
+        tds: 0,
+        balance: opening,
+        status: '',
+        isMain: true,
+        isOpening: true
+      });
+    }
+    
+    // Process invoices
+    Array.from(invoiceMap.values())
+      .filter(inv => {
+        const invDate = new Date(inv.invoiceDate);
+        return invDate >= new Date(ledgerPeriod.fromDate) && invDate <= new Date(ledgerPeriod.toDate);
+      })
+      .sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate))
+      .forEach(inv => {
+        let baseAmount = 0;
+        inv.campaigns.forEach(c => baseAmount += parseFloat(c.invoiceAmount) || 0);
+        
+        const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const cgst = isSameState ? baseAmount * 0.09 : 0;
+        const sgst = isSameState ? baseAmount * 0.09 : 0;
+        const igst = isSameState ? 0 : baseAmount * 0.18;
+        const totalAmount = baseAmount + cgst + sgst + igst;
+        
+        const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
+        runningBalance += totalAmount;
+        totalDebit += totalAmount;
+        
+        let amountReceived = 0, tdsReceived = 0, receiptDate = '', paymentStatus = 'Pending';
+        if (invoiceReceipt) {
+          paymentStatus = 'Received';
+          amountReceived = invoiceReceipt.amount || 0;
+          tdsReceived = invoiceReceipt.tds || 0;
+          receiptDate = invoiceReceipt.date;
+          totalReceived += amountReceived;
+          totalTds += tdsReceived;
+          runningBalance -= (amountReceived + tdsReceived + (invoiceReceipt.discount || 0));
+        } else if (inv.receiptStatus === 'Received') {
+          paymentStatus = 'Received';
+        }
+        
+        // Main invoice row
+        pdfRows.push({
+          date: inv.invoiceDate,
+          particular: selectedParty,
+          vchType: 'Sales',
+          vchNo: inv.invoiceNo,
+          debit: totalAmount,
+          credit: 0,
+          receiptDate: receiptDate,
+          amountReceived: amountReceived,
+          tds: tdsReceived,
+          balance: paymentStatus === 'Received' ? 0 : totalAmount - amountReceived - tdsReceived,
+          status: paymentStatus,
+          isMain: true
+        });
+        
+        // Sub-rows
+        pdfRows.push({
+          particular: 'PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''),
+          credit: baseAmount,
+          isMain: false
+        });
+        
+        if (isSameState) {
+          pdfRows.push({ particular: 'CGST', credit: cgst, isMain: false });
+          pdfRows.push({ particular: 'SGST', credit: sgst, isMain: false });
+        } else {
+          pdfRows.push({ particular: 'IGST', credit: igst, isMain: false });
+        }
+      });
+    
+    // Process credit notes
+    partyCreditNotes
+      .filter(cn => {
+        const cnDate = new Date(cn.date);
+        return cnDate >= new Date(ledgerPeriod.fromDate) && cnDate <= new Date(ledgerPeriod.toDate);
+      })
+      .forEach(cn => {
+        const cnAmount = cn.credit || 0;
+        runningBalance -= cnAmount;
+        totalCredit += cnAmount;
+        
+        const baseAmount = cnAmount / 1.18;
+        const taxAmount = cnAmount - baseAmount;
+        
+        pdfRows.push({
+          date: cn.date,
+          particular: selectedParty,
+          vchType: 'Credit Note',
+          vchNo: cn.creditNoteNo || `CN/${cn.invoiceNo?.replace('MB/', '')}`,
+          debit: 0,
+          credit: cnAmount,
+          balance: 0,
+          status: '',
+          isMain: true,
+          isCreditNote: true
+        });
+        
+        pdfRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', debit: -baseAmount, isMain: false });
+        pdfRows.push({ particular: 'IGST', debit: -taxAmount, isMain: false });
+      });
+    
+    // Get party address
+    const partyRow = masterData.find(r => r.partyName === selectedParty);
+    const partyAddress = partyRow?.statePartyDetails || '';
     
     const html = `
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Ledger Statement - ${selectedParty}</title>
+  <title>Ledger Account - ${selectedParty}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 12px; padding: 30px; }
-    .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #2874A6; padding-bottom: 20px; }
-    .firm-name { font-size: 22px; font-weight: bold; color: #1E293B; margin-bottom: 5px; }
-    .firm-address { font-size: 11px; color: #64748B; }
-    .statement-title { font-size: 16px; font-weight: bold; margin-top: 15px; color: #2874A6; }
-    .party-details { background-color: #F8FAFC; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
-    .party-name { font-size: 16px; font-weight: bold; color: #1E293B; margin-bottom: 5px; }
-    .period { font-size: 12px; color: #64748B; }
-    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th { background-color: #2874A6; color: white; padding: 10px 8px; text-align: left; font-size: 11px; }
-    th:nth-child(4), th:nth-child(5), th:nth-child(6) { text-align: right; }
-    td { padding: 8px; border-bottom: 1px solid #E2E8F0; font-size: 11px; }
-    td:nth-child(4), td:nth-child(5), td:nth-child(6) { text-align: right; }
-    .opening-row { background-color: #FEF3C7; font-weight: bold; }
-    .credit-row { color: #059669; }
-    .debit-row { color: #DC2626; }
-    .footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #E2E8F0; }
-    .closing-balance { font-size: 14px; font-weight: bold; text-align: right; }
-    .dr { color: #DC2626; }
-    .cr { color: #059669; }
-    @media print { body { padding: 15px; } }
+    body { font-family: Arial, sans-serif; font-size: 11px; padding: 20px; }
+    .header { text-align: center; margin-bottom: 15px; }
+    .firm-name { font-size: 18px; font-weight: bold; color: #1E293B; }
+    .firm-address { font-size: 10px; color: #666; margin-top: 2px; }
+    .party-section { text-align: center; margin: 15px 0; padding: 10px; border: 1px solid #ddd; background: #f9f9f9; }
+    .party-name { font-size: 14px; font-weight: bold; }
+    .ledger-title { font-size: 11px; color: #666; }
+    .party-address { font-size: 10px; color: #666; margin-top: 5px; }
+    .period { text-align: center; font-size: 11px; margin: 10px 0; font-weight: bold; }
+    .totals { display: flex; justify-content: space-around; background: #e8f4fd; padding: 8px; margin-bottom: 10px; font-size: 10px; }
+    .totals div { text-align: center; }
+    .totals .label { color: #666; }
+    .totals .value { font-weight: bold; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    th { background: #f0f0f0; border: 1px solid #ccc; padding: 6px 4px; text-align: left; font-weight: bold; }
+    td { border: 1px solid #ddd; padding: 5px 4px; }
+    .text-right { text-align: right; }
+    .text-center { text-align: center; }
+    .main-row { background: #fff; }
+    .sub-row { background: #fafafa; }
+    .sub-row td { padding-left: 20px; color: #666; font-size: 9px; }
+    .opening-row { background: #fef3c7; font-weight: bold; }
+    .credit-note-row { background: #fee2e2; }
+    .status-received { background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 3px; font-size: 9px; }
+    .status-pending { background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 3px; font-size: 9px; }
+    .debit { color: #dc2626; }
+    .credit { color: #059669; }
+    @media print { 
+      body { padding: 10px; } 
+      @page { size: landscape; margin: 10mm; }
+    }
   </style>
 </head>
 <body>
   <div class="header">
     <div class="firm-name">${companyConfig.name}</div>
-    <div class="firm-address">${companyConfig.address}, ${companyConfig.addressLine2}, ${companyConfig.city}</div>
-    <div class="firm-address">GSTIN: ${companyConfig.gstin} | PAN: ${companyConfig.pan}</div>
-    <div class="statement-title">LEDGER STATEMENT</div>
+    <div class="firm-address">${companyConfig.address}</div>
+    <div class="firm-address">${companyConfig.addressLine2}, ${companyConfig.city}</div>
+    <div class="firm-address">E-Mail: ${companyConfig.email}</div>
   </div>
   
-  <div class="party-details">
+  <div class="party-section">
     <div class="party-name">${selectedParty}</div>
-    <div class="period">Period: ${formatDate(ledgerPeriod.fromDate)} to ${formatDate(ledgerPeriod.toDate)}</div>
+    <div class="ledger-title">Ledger Account</div>
+    ${partyAddress ? `<div class="party-address">${partyAddress}</div>` : ''}
+  </div>
+  
+  <div class="period">${formatDate(ledgerPeriod.fromDate)} to ${formatDate(ledgerPeriod.toDate)}</div>
+  
+  <div class="totals">
+    <div><div class="label">Debit</div><div class="value">${formatCurrencyShort(totalDebit)}</div></div>
+    <div><div class="label">Credit</div><div class="value">${formatCurrencyShort(totalCredit)}</div></div>
+    <div><div class="label">Amount Received</div><div class="value credit">${formatCurrencyShort(totalReceived)}</div></div>
+    <div><div class="label">TDS Received</div><div class="value">${formatCurrencyShort(totalTds)}</div></div>
+    <div><div class="label">Balance</div><div class="value ${runningBalance > 0 ? 'debit' : 'credit'}">${formatCurrencyShort(Math.abs(runningBalance))}</div></div>
   </div>
   
   <table>
     <thead>
       <tr>
-        <th style="width: 80px;">Date</th>
-        <th>Particulars</th>
-        <th>Narration</th>
-        <th style="width: 90px;">Debit</th>
-        <th style="width: 90px;">Credit</th>
-        <th style="width: 100px;">Balance</th>
+        <th style="width:65px">Date</th>
+        <th>Particular</th>
+        <th style="width:70px" class="text-center">Vch Type</th>
+        <th style="width:100px">Vch No.</th>
+        <th style="width:80px" class="text-right">Debit</th>
+        <th style="width:80px" class="text-right">Credit</th>
+        <th style="width:70px" class="text-center">Date of Receipt</th>
+        <th style="width:85px" class="text-right">Amount Received</th>
+        <th style="width:70px" class="text-right">TDS Received</th>
+        <th style="width:75px" class="text-right">Balance</th>
+        <th style="width:70px" class="text-center">Payment Status</th>
       </tr>
     </thead>
     <tbody>
-      ${filteredLedger.map(entry => `
-        <tr class="${entry.isOpening ? 'opening-row' : (entry.credit > 0 ? 'credit-row' : '')}">
-          <td>${entry.isOpening ? '-' : formatDate(entry.date)}</td>
-          <td>${entry.particulars}</td>
-          <td>${entry.narration || '-'}</td>
-          <td>${entry.debit > 0 ? formatCurrencyShort(entry.debit) : '-'}</td>
-          <td>${entry.credit > 0 ? formatCurrencyShort(entry.credit) : '-'}</td>
-          <td class="${entry.balance > 0 ? 'dr' : 'cr'}">${entry.balance > 0 ? 'Dr.' : 'Cr.'} ${formatCurrencyShort(Math.abs(entry.balance))}</td>
+      ${pdfRows.map(row => row.isMain ? `
+        <tr class="${row.isOpening ? 'opening-row' : (row.isCreditNote ? 'credit-note-row' : 'main-row')}">
+          <td>${row.date ? formatDate(row.date) : ''}</td>
+          <td style="font-weight:600">${row.particular}</td>
+          <td class="text-center">${row.vchType || ''}</td>
+          <td style="color:#2874A6;font-weight:600">${row.vchNo || ''}</td>
+          <td class="text-right">${row.debit > 0 ? formatCurrencyShort(row.debit) : ''}</td>
+          <td class="text-right">${row.credit > 0 ? formatCurrencyShort(row.credit) : ''}</td>
+          <td class="text-center">${row.receiptDate ? formatDate(row.receiptDate) : ''}</td>
+          <td class="text-right credit">${row.amountReceived > 0 ? formatCurrencyShort(row.amountReceived) : ''}</td>
+          <td class="text-right">${row.tds > 0 ? formatCurrencyShort(row.tds) : ''}</td>
+          <td class="text-right ${row.balance > 0 ? 'debit' : ''}">${row.balance > 0 ? formatCurrencyShort(row.balance) : (row.isOpening ? '' : '-')}</td>
+          <td class="text-center">${row.status ? `<span class="${row.status === 'Received' ? 'status-received' : 'status-pending'}">${row.status}</span>` : ''}</td>
+        </tr>
+      ` : `
+        <tr class="sub-row">
+          <td></td>
+          <td style="padding-left:20px;color:#666">${row.particular}</td>
+          <td></td>
+          <td></td>
+          <td class="text-right debit">${row.debit ? formatCurrencyShort(row.debit) : ''}</td>
+          <td class="text-right">${row.credit ? formatCurrencyShort(row.credit) : ''}</td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
+          <td></td>
         </tr>
       `).join('')}
     </tbody>
   </table>
-  
-  <div class="footer">
-    <div class="closing-balance">
-      Closing Balance: <span class="${closingBalance > 0 ? 'dr' : 'cr'}">${closingBalance > 0 ? 'Dr.' : 'Cr.'} ${formatCurrency(Math.abs(closingBalance))}</span>
-    </div>
-  </div>
   
   <script>window.onload = function() { window.print(); }</script>
 </body>
@@ -2635,33 +2823,228 @@ ${generateInvoiceHtml(row)}
       party.toLowerCase().includes(ledgerPartySearch.toLowerCase())
     );
     
-    // Filter ledger entries by period
-    const filteredPartyLedger = selectedParty ? (() => {
+    // Get party address from masterData
+    const getPartyAddress = (partyName) => {
+      const partyRow = masterData.find(r => r.partyName === partyName);
+      return partyRow?.statePartyDetails || '';
+    };
+    
+    // Build detailed ledger data for selected party
+    const buildDetailedLedger = () => {
+      if (!selectedParty) return { entries: [], totals: { debit: 0, credit: 0, received: 0, tds: 0, balance: 0 } };
+      
       const opening = openingBalances[selectedParty] || 0;
-      const entries = ledgerEntries
-        .filter(e => e.partyName === selectedParty)
-        .filter(e => {
-          const entryDate = new Date(e.date);
-          const fromDate = new Date(ledgerPeriod.fromDate);
-          const toDate = new Date(ledgerPeriod.toDate);
-          return entryDate >= fromDate && entryDate <= toDate;
-        })
-        .sort((a, b) => new Date(a.date) - new Date(b.date));
       
-      let balance = opening;
-      const result = [];
+      // Get all invoices for this party
+      const partyInvoices = masterData.filter(r => 
+        r.partyName === selectedParty && 
+        r.invoiceGenerated && 
+        r.invoiceStatus === 'Approved'
+      );
       
-      if (opening !== 0) {
-        result.push({ id: 'opening', date: '', particulars: 'Opening Balance', narration: '', debit: opening > 0 ? opening : 0, credit: opening < 0 ? Math.abs(opening) : 0, balance: opening, isOpening: true });
-      }
-      
-      entries.forEach(entry => {
-        balance += entry.debit - entry.credit;
-        result.push({ ...entry, balance });
+      // Group by invoice number
+      const invoiceMap = new Map();
+      partyInvoices.forEach(row => {
+        if (!invoiceMap.has(row.invoiceNo)) {
+          invoiceMap.set(row.invoiceNo, {
+            invoiceNo: row.invoiceNo,
+            invoiceDate: row.invoiceDate,
+            invoiceType: row.invoiceType,
+            combinationCode: row.combinationCode,
+            receiptStatus: row.receiptStatus,
+            receiptNo: row.receiptNo,
+            receiptDate: row.receiptDate,
+            campaigns: [row]
+          });
+        } else {
+          invoiceMap.get(row.invoiceNo).campaigns.push(row);
+        }
       });
       
-      return result;
-    })() : [];
+      // Get receipts for this party
+      const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
+      
+      // Get credit notes for this party
+      const partyCreditNotes = ledgerEntries.filter(e => 
+        e.partyName === selectedParty && e.type === 'creditnote'
+      );
+      
+      // Build ledger entries
+      const entries = [];
+      let runningBalance = opening;
+      let totalDebit = 0;
+      let totalCredit = 0;
+      let totalReceived = 0;
+      let totalTds = 0;
+      
+      // Add opening balance if exists
+      if (opening !== 0) {
+        entries.push({
+          id: 'opening',
+          date: '',
+          particular: 'Opening Balance',
+          vchType: '',
+          vchNo: '',
+          debit: opening > 0 ? opening : 0,
+          credit: opening < 0 ? Math.abs(opening) : 0,
+          receiptDate: '',
+          amountReceived: 0,
+          tdsReceived: 0,
+          balance: opening,
+          paymentStatus: '',
+          isOpening: true,
+          subRows: []
+        });
+        totalDebit += opening > 0 ? opening : 0;
+        totalCredit += opening < 0 ? Math.abs(opening) : 0;
+      }
+      
+      // Convert to array and sort by date
+      const allInvoices = Array.from(invoiceMap.values())
+        .filter(inv => {
+          const invDate = new Date(inv.invoiceDate);
+          const fromDate = new Date(ledgerPeriod.fromDate);
+          const toDate = new Date(ledgerPeriod.toDate);
+          return invDate >= fromDate && invDate <= toDate;
+        })
+        .sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate));
+      
+      // Process each invoice
+      allInvoices.forEach(inv => {
+        // Calculate amounts
+        let baseAmount = 0;
+        inv.campaigns.forEach(c => {
+          baseAmount += parseFloat(c.invoiceAmount) || 0;
+        });
+        
+        // Check if same state (Maharashtra)
+        const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const cgst = isSameState ? baseAmount * 0.09 : 0;
+        const sgst = isSameState ? baseAmount * 0.09 : 0;
+        const igst = isSameState ? 0 : baseAmount * 0.18;
+        const totalTax = cgst + sgst + igst;
+        const totalAmount = baseAmount + totalTax;
+        
+        // Get receipt info for this invoice
+        const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
+        
+        runningBalance += totalAmount;
+        totalDebit += totalAmount;
+        
+        // Sub-rows for base amount and tax
+        const subRows = [
+          { particular: 'PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), credit: baseAmount },
+        ];
+        
+        if (isSameState) {
+          subRows.push({ particular: 'CGST', credit: cgst });
+          subRows.push({ particular: 'SGST', credit: sgst });
+        } else {
+          subRows.push({ particular: 'IGST', credit: igst });
+        }
+        
+        // Determine payment status
+        let paymentStatus = '';
+        let amountReceived = 0;
+        let tdsReceived = 0;
+        let receiptDate = '';
+        
+        if (invoiceReceipt) {
+          paymentStatus = 'Received';
+          amountReceived = invoiceReceipt.amount || 0;
+          tdsReceived = invoiceReceipt.tds || 0;
+          receiptDate = invoiceReceipt.date;
+          totalReceived += amountReceived;
+          totalTds += tdsReceived;
+          
+          // Reduce balance by receipt
+          runningBalance -= (amountReceived + tdsReceived + (invoiceReceipt.discount || 0));
+        } else if (inv.receiptStatus === 'Received') {
+          paymentStatus = 'Received';
+        } else {
+          paymentStatus = 'Pending';
+        }
+        
+        entries.push({
+          id: inv.invoiceNo,
+          date: inv.invoiceDate,
+          particular: selectedParty,
+          vchType: 'Sales',
+          vchNo: inv.invoiceNo,
+          debit: totalAmount,
+          credit: 0,
+          receiptDate: receiptDate,
+          amountReceived: amountReceived,
+          tdsReceived: tdsReceived,
+          balance: paymentStatus === 'Received' ? 0 : totalAmount - amountReceived - tdsReceived,
+          paymentStatus: paymentStatus,
+          isInvoice: true,
+          subRows: subRows
+        });
+      });
+      
+      // Process credit notes
+      partyCreditNotes
+        .filter(cn => {
+          const cnDate = new Date(cn.date);
+          const fromDate = new Date(ledgerPeriod.fromDate);
+          const toDate = new Date(ledgerPeriod.toDate);
+          return cnDate >= fromDate && cnDate <= toDate;
+        })
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .forEach(cn => {
+          const cnAmount = cn.credit || 0;
+          runningBalance -= cnAmount;
+          totalCredit += cnAmount;
+          
+          // Find original invoice to get tax breakdown
+          const originalInvoice = masterData.find(r => r.invoiceNo === cn.invoiceNo);
+          const isSameState = originalInvoice?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const baseAmount = cnAmount / 1.18;
+          const taxAmount = cnAmount - baseAmount;
+          
+          const subRows = [
+            { particular: 'PROMOTIONAL TRADE EMAILER' + (originalInvoice?.invoiceType === 'Combined' ? 'S' : ''), debit: -baseAmount },
+          ];
+          
+          if (isSameState) {
+            subRows.push({ particular: 'CGST', debit: -taxAmount / 2 });
+            subRows.push({ particular: 'SGST', debit: -taxAmount / 2 });
+          } else {
+            subRows.push({ particular: 'IGST', debit: -taxAmount });
+          }
+          
+          entries.push({
+            id: cn.id,
+            date: cn.date,
+            particular: selectedParty,
+            vchType: 'Credit Note',
+            vchNo: cn.creditNoteNo || `CN/${cn.invoiceNo?.replace('MB/', '')}`,
+            debit: 0,
+            credit: cnAmount,
+            receiptDate: '',
+            amountReceived: 0,
+            tdsReceived: 0,
+            balance: 0,
+            paymentStatus: '',
+            isCreditNote: true,
+            subRows: subRows
+          });
+        });
+      
+      return {
+        entries,
+        totals: {
+          debit: totalDebit,
+          credit: totalCredit,
+          received: totalReceived,
+          tds: totalTds,
+          balance: runningBalance
+        }
+      };
+    };
+    
+    const ledgerData = buildDetailedLedger();
 
     return (
       <div>
@@ -2732,52 +3115,156 @@ ${generateInvoiceHtml(row)}
               )}
             </div>
           </Card>
-          <Card title={selectedParty ? `${selectedParty} - Statement` : 'Select a Party'} noPadding>
-            {filteredPartyLedger.length > 0 ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#F8FAFC' }}>
-                    <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700', width: '90px' }}>Date</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700' }}>Particulars</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700' }}>Narration</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '100px' }}>Debit</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '100px' }}>Credit</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '120px' }}>Balance</th>
-                    <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', width: '60px' }}>View</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPartyLedger.map(entry => (
-                    <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.type === 'receipt' ? '#F0FDF4' : (entry.type === 'creditnote' ? '#FEF2F2' : 'transparent')) }}>
-                      <td style={{ padding: '12px 14px' }}>{entry.isOpening ? '-' : formatDate(entry.date)}</td>
-                      <td style={{ padding: '12px 14px', fontWeight: entry.isOpening ? '600' : '500' }}>{entry.particulars}</td>
-                      <td style={{ padding: '12px 14px', fontSize: '12px', color: '#64748B' }}>{entry.narration || '-'}</td>
-                      <td style={{ padding: '12px 14px', textAlign: 'right', color: '#DC2626', fontWeight: '600' }}>{entry.debit > 0 ? formatCurrency(entry.debit) : '-'}</td>
-                      <td style={{ padding: '12px 14px', textAlign: 'right', color: '#059669', fontWeight: '600' }}>{entry.credit > 0 ? formatCurrency(entry.credit) : '-'}</td>
-                      <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', color: entry.balance > 0 ? '#DC2626' : '#059669' }}>{entry.balance > 0 ? 'Dr. ' : 'Cr. '}{formatCurrency(Math.abs(entry.balance))}</td>
-                      <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                        {entry.type === 'receipt' && entry.paymentAdvisory && (
-                          <button 
-                            onClick={() => {
-                              const w = window.open('', '_blank');
-                              w.document.write(`<html><head><title>Payment Advisory - ${entry.receiptNo}</title></head><body style="margin:0;padding:20px;background:#f5f5f5;"><img src="${entry.paymentAdvisory}" style="max-width:100%;height:auto;border:1px solid #ddd;"/><br/><button onclick="window.print()" style="margin-top:20px;padding:10px 20px;cursor:pointer;">Print</button></body></html>`);
-                              w.document.close();
-                            }}
-                            style={{ padding: '4px 8px', fontSize: '11px', border: '1px solid #2874A6', borderRadius: '4px', backgroundColor: '#EFF6FF', color: '#2874A6', cursor: 'pointer', fontWeight: '600' }}
-                            title="View Payment Advisory"
-                          >
-                            📎
-                          </button>
-                        )}
-                        {entry.type === 'receipt' && !entry.paymentAdvisory && (
-                          <span style={{ color: '#94A3B8', fontSize: '11px' }}>-</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>{selectedParty ? 'No entries in selected period' : 'Select a party to view ledger'}</div>}
+          
+          {/* Ledger Statement Card */}
+          <Card title={selectedParty ? 'Ledger Account' : 'Select a Party'} noPadding>
+            {selectedParty ? (
+              <div style={{ fontSize: '12px' }}>
+                {/* Header with company info */}
+                <div style={{ textAlign: 'center', padding: '16px', borderBottom: '2px solid #1E3A5F', backgroundColor: '#F8FAFC' }}>
+                  <div style={{ fontSize: '16px', fontWeight: '700', color: '#1E3A5F' }}>{companyConfig.name}</div>
+                  <div style={{ fontSize: '11px', color: '#64748B', marginTop: '4px' }}>{companyConfig.address}</div>
+                  <div style={{ fontSize: '11px', color: '#64748B' }}>{companyConfig.addressLine2}, {companyConfig.city}</div>
+                  <div style={{ fontSize: '11px', color: '#64748B' }}>E-Mail: {companyConfig.email}</div>
+                </div>
+                
+                {/* Party Info */}
+                <div style={{ textAlign: 'center', padding: '12px', borderBottom: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
+                  <div style={{ fontSize: '14px', fontWeight: '700', color: '#1E293B' }}>{selectedParty}</div>
+                  <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B' }}>Ledger Account</div>
+                  {getPartyAddress(selectedParty) && (
+                    <div style={{ fontSize: '11px', color: '#64748B', marginTop: '4px' }}>{getPartyAddress(selectedParty)}</div>
+                  )}
+                </div>
+                
+                {/* Period */}
+                <div style={{ textAlign: 'center', padding: '8px', backgroundColor: '#F1F5F9', borderBottom: '1px solid #E2E8F0' }}>
+                  <span style={{ fontSize: '11px', fontWeight: '600', color: '#475569' }}>
+                    {formatDate(ledgerPeriod.fromDate)} to {formatDate(ledgerPeriod.toDate)}
+                  </span>
+                </div>
+                
+                {/* Totals Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', backgroundColor: '#EFF6FF', borderBottom: '2px solid #2874A6', fontSize: '11px' }}>
+                  <div style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #BFDBFE' }}>
+                    <div style={{ color: '#64748B' }}>Debit</div>
+                    <div style={{ fontWeight: '700', color: '#1E293B' }}>{formatCurrencyShort(ledgerData.totals.debit)}</div>
+                  </div>
+                  <div style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #BFDBFE' }}>
+                    <div style={{ color: '#64748B' }}>Credit</div>
+                    <div style={{ fontWeight: '700', color: '#1E293B' }}>{formatCurrencyShort(ledgerData.totals.credit)}</div>
+                  </div>
+                  <div style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #BFDBFE' }}>
+                    <div style={{ color: '#64748B' }}>Amount Received</div>
+                    <div style={{ fontWeight: '700', color: '#059669' }}>{formatCurrencyShort(ledgerData.totals.received)}</div>
+                  </div>
+                  <div style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #BFDBFE' }}>
+                    <div style={{ color: '#64748B' }}>TDS Received</div>
+                    <div style={{ fontWeight: '700', color: '#1E293B' }}>{formatCurrencyShort(ledgerData.totals.tds)}</div>
+                  </div>
+                  <div style={{ padding: '8px', textAlign: 'center' }}>
+                    <div style={{ color: '#64748B' }}>Balance</div>
+                    <div style={{ fontWeight: '700', color: ledgerData.totals.balance > 0 ? '#DC2626' : '#059669' }}>{formatCurrencyShort(Math.abs(ledgerData.totals.balance))}</div>
+                  </div>
+                </div>
+                
+                {/* Ledger Table */}
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', minWidth: '1000px' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+                        <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '700', width: '75px', borderRight: '1px solid #E2E8F0' }}>Date</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '700', minWidth: '150px', borderRight: '1px solid #E2E8F0' }}>Particular</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '700', width: '80px', borderRight: '1px solid #E2E8F0' }}>Vch Type</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '700', width: '110px', borderRight: '1px solid #E2E8F0' }}>Vch No.</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '700', width: '90px', borderRight: '1px solid #E2E8F0' }}>Debit</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '700', width: '90px', borderRight: '1px solid #E2E8F0' }}>Credit</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '700', width: '85px', borderRight: '1px solid #E2E8F0' }}>Date of Receipt</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '700', width: '90px', borderRight: '1px solid #E2E8F0' }}>Amount Received</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '700', width: '80px', borderRight: '1px solid #E2E8F0' }}>TDS Received</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '700', width: '85px', borderRight: '1px solid #E2E8F0' }}>Balance</th>
+                        <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '700', width: '75px' }}>Payment Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ledgerData.entries.length === 0 ? (
+                        <tr><td colSpan="11" style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>No entries in selected period</td></tr>
+                      ) : (
+                        ledgerData.entries.map(entry => (
+                          <React.Fragment key={entry.id}>
+                            {/* Main Row */}
+                            <tr style={{ backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.isCreditNote ? '#FEF2F2' : '#FFFFFF'), borderBottom: '1px solid #E2E8F0' }}>
+                              <td style={{ padding: '8px', borderRight: '1px solid #E2E8F0' }}>{entry.date ? formatDate(entry.date) : ''}</td>
+                              <td style={{ padding: '8px', fontWeight: '600', color: entry.isCreditNote ? '#DC2626' : '#1E293B', borderRight: '1px solid #E2E8F0' }}>{entry.particular}</td>
+                              <td style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #E2E8F0' }}>
+                                {entry.vchType && (
+                                  <span style={{ 
+                                    padding: '2px 6px', 
+                                    borderRadius: '4px', 
+                                    fontSize: '10px', 
+                                    fontWeight: '600',
+                                    backgroundColor: entry.vchType === 'Sales' ? '#DCFCE7' : '#FEE2E2',
+                                    color: entry.vchType === 'Sales' ? '#166534' : '#991B1B'
+                                  }}>
+                                    {entry.vchType}
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ padding: '8px', fontWeight: '600', color: '#2874A6', borderRight: '1px solid #E2E8F0' }}>{entry.vchNo}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', fontWeight: '600', borderRight: '1px solid #E2E8F0' }}>{entry.debit > 0 ? formatCurrencyShort(entry.debit) : ''}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}></td>
+                              <td style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #E2E8F0' }}>{entry.receiptDate ? formatDate(entry.receiptDate) : ''}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', color: '#059669', fontWeight: entry.amountReceived > 0 ? '600' : '400', borderRight: '1px solid #E2E8F0' }}>{entry.amountReceived > 0 ? formatCurrencyShort(entry.amountReceived) : ''}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}>{entry.tdsReceived > 0 ? formatCurrencyShort(entry.tdsReceived) : ''}</td>
+                              <td style={{ padding: '8px', textAlign: 'right', fontWeight: '600', color: entry.balance > 0 ? '#DC2626' : '', borderRight: '1px solid #E2E8F0' }}>
+                                {entry.isOpening ? (entry.balance > 0 ? formatCurrencyShort(entry.balance) : '') : (entry.balance > 0 ? formatCurrencyShort(entry.balance) : '-')}
+                              </td>
+                              <td style={{ padding: '8px', textAlign: 'center' }}>
+                                {entry.paymentStatus && (
+                                  <span style={{ 
+                                    padding: '2px 8px', 
+                                    borderRadius: '4px', 
+                                    fontSize: '10px', 
+                                    fontWeight: '600',
+                                    backgroundColor: entry.paymentStatus === 'Received' ? '#DCFCE7' : '#FEF3C7',
+                                    color: entry.paymentStatus === 'Received' ? '#166534' : '#92400E'
+                                  }}>
+                                    {entry.paymentStatus}
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                            
+                            {/* Sub Rows for line items */}
+                            {entry.subRows && entry.subRows.map((sub, idx) => (
+                              <tr key={`${entry.id}-sub-${idx}`} style={{ backgroundColor: '#FAFAFA', borderBottom: idx === entry.subRows.length - 1 ? '2px solid #E2E8F0' : '1px solid #F1F5F9' }}>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px 6px 24px', color: '#64748B', fontSize: '10px', borderRight: '1px solid #E2E8F0' }}>{sub.particular}</td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px', textAlign: 'right', color: sub.debit < 0 ? '#DC2626' : '', borderRight: '1px solid #E2E8F0' }}>
+                                  {sub.debit ? formatCurrencyShort(sub.debit) : ''}
+                                </td>
+                                <td style={{ padding: '6px 8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}>
+                                  {sub.credit ? formatCurrencyShort(sub.credit) : ''}
+                                </td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
+                                <td style={{ padding: '6px 8px' }}></td>
+                              </tr>
+                            ))}
+                          </React.Fragment>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>Select a party to view ledger</div>
+            )}
           </Card>
         </div>
       </div>
