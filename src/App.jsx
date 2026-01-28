@@ -10,7 +10,7 @@ import {
   Edit2, Save, ExternalLink, Clipboard, Table, Link2, Camera, FileDown, PlusCircle,
   MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone
 } from 'lucide-react';
-import { saveAppState, loadAppState } from './firebase';
+import { saveAppState, loadAppState, subscribeToAppState } from './firebase';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -474,6 +474,10 @@ export default function FinanceApp() {
   // FIREBASE DATA PERSISTENCE
   // ============================================
   
+  // Ref to track if update is from server (to avoid save loop)
+  const isReceivingUpdateRef = useRef(false);
+  const unsubscribeRef = useRef(null);
+  
   // Load data from Firebase on login
   const loadDataFromFirebase = async () => {
     setIsLoading(true);
@@ -540,12 +544,18 @@ export default function FinanceApp() {
   useEffect(() => {
     if (!isLoggedIn) return;
     
+    // Skip save if we're receiving an update from Firebase (to avoid loop)
+    if (isReceivingUpdateRef.current) return;
+    
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
     
     saveTimeoutRef.current = setTimeout(() => {
-      saveDataToFirebase();
+      // Double-check we're not in a receiving state
+      if (!isReceivingUpdateRef.current) {
+        saveDataToFirebase();
+      }
     }, 2000);
     
     return () => {
@@ -707,6 +717,59 @@ export default function FinanceApp() {
       }
     }
   }, []);
+  
+  // Real-time sync listener - updates data when changes happen in Firebase
+  useEffect(() => {
+    if (!isLoggedIn) {
+      // Cleanup subscription on logout
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+      return;
+    }
+    
+    // Set up real-time listener
+    unsubscribeRef.current = subscribeToAppState('indreesh-media', (data) => {
+      if (!data) return;
+      
+      // Mark that we're receiving an update to avoid save loop
+      isReceivingUpdateRef.current = true;
+      
+      // Only update if data is different (compare timestamps or use deep comparison)
+      if (data.masterData) setMasterData(data.masterData);
+      if (data.ledgerEntries) setLedgerEntries(data.ledgerEntries);
+      if (data.receipts) setReceipts(data.receipts);
+      if (data.creditNotes) setCreditNotes(data.creditNotes);
+      if (data.openingBalances) setOpeningBalances(data.openingBalances);
+      if (data.mailerImages) setMailerImages(data.mailerImages);
+      if (data.mailerLogo) setMailerLogo(data.mailerLogo);
+      if (data.companyConfig) setCompanyConfig(prev => ({ ...prev, ...data.companyConfig }));
+      if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
+      if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
+      if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
+      if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
+      if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
+      if (data.notifications) setNotifications(data.notifications);
+      if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
+      if (data.partyMaster) setPartyMaster(data.partyMaster);
+      if (data.followups) setFollowups(data.followups);
+      
+      // Reset flag after a short delay
+      setTimeout(() => {
+        isReceivingUpdateRef.current = false;
+      }, 500);
+      
+      console.log('Real-time sync: Data updated from Firebase');
+    });
+    
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
+  }, [isLoggedIn]);
 
   const canEdit = userRole === 'finance';
   const isDirector = userRole === 'director';
@@ -930,6 +993,9 @@ export default function FinanceApp() {
     // Notify finance about approval
     addNotification('approval', `✅ Invoice ${selectedRow.invoiceNo} has been APPROVED by Director - ready for mailing`, 'finance');
     
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
+    
     setShowApprovalModal(false);
     setSelectedRow(null);
     setApprovalChecks({ particularsApproved: false, emailApproved: false, invoiceTypeApproved: false });
@@ -958,6 +1024,9 @@ export default function FinanceApp() {
     
     // Notify finance about edits needed
     addNotification('edit', `✏️ Invoice ${selectedRow.invoiceNo} marked as NEED EDITS by Director: "${editComments}"`, 'finance');
+    
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
     
     setShowApprovalModal(false);
     setSelectedRow(null);
@@ -989,12 +1058,13 @@ export default function FinanceApp() {
       return;
     }
     
-    // Check if invoice is approved and mailed
+    // Check if invoice is approved (skip mailing check for historical invoices)
     if (selectedRow.invoiceStatus !== 'Approved') {
       alert('Receipt cannot be posted. Invoice must be approved first.');
       return;
     }
-    if (selectedRow.mailingSent !== 'Yes') {
+    // Skip mailing check for historical invoices
+    if (!selectedRow.isHistorical && selectedRow.mailingSent !== 'Yes') {
       alert('Receipt cannot be posted. Invoice must be mailed first.');
       return;
     }
@@ -1097,6 +1167,9 @@ export default function FinanceApp() {
     // Notify director about payment received
     addNotification('receipt', `💰 Payment received for ${selectedRow.partyName} - Receipt ${receiptNo} - ${formatCurrency(totalCredit)}`, 'director');
     
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
+    
     setShowReceiptModal(false);
     setSelectedRow(null);
     setReceiptForm({ amount: '', tds: '', discount: '', narration: '', paymentAdvisory: null, date: new Date().toISOString().split('T')[0], mode: 'Bank' });
@@ -1167,6 +1240,9 @@ export default function FinanceApp() {
     setShowCreditNoteModal(false);
     setSelectedRow(null);
     setCreditNoteForm({ amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0] });
+    
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
     
     let alertMsg = `✅ Credit Note Created!\n\nCredit Note No: ${creditNoteNo}`;
     if (creditAmount > 0) alertMsg += `\nBase Amount: ${formatCurrency(creditAmount)}`;
@@ -1902,6 +1978,9 @@ Phone: ${companyConfig.phone}`;
     // Notify director about new invoice
     addNotification('invoice', `🧾 New Invoice ${invoiceNo} created for ${row.partyName} - ${formatCurrency(totalAmount)}`, 'director');
     
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
+    
     alert(`✅ Invoice Generated!\n\nInvoice No: ${invoiceNo}\nAmount: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
   };
 
@@ -1936,6 +2015,9 @@ Phone: ${companyConfig.phone}`;
     
     // Notify director about new combined invoice
     addNotification('invoice', `🧾 Combined Invoice ${invoiceNo} created for ${combineParty} (${selectedRows.length} campaigns) - ${formatCurrency(totalAmount)}`, 'director');
+    
+    // Immediate save to Firebase for critical action
+    setTimeout(() => saveDataToFirebase(), 100);
     
     setCombineParty(null);
     alert(`✅ Combined Invoice Generated!\n\nInvoice No: ${invoiceNo}\nCampaigns: ${selectedForCombine.size}\nTotal: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
@@ -2694,6 +2776,17 @@ ${generateInvoiceHtml(row)}
                                   {row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
                                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                       <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
+                                      <ActionButton icon={Mail} small variant="brand" onClick={() => {
+                                        // Generate email template
+                                        const inv = {
+                                          invoiceNo: row.invoiceNo,
+                                          partyName: row.partyName,
+                                          invoiceTotalAmount: row.invoiceTotalAmount,
+                                          invoiceDate: row.invoiceDate,
+                                          campaigns: [row]
+                                        };
+                                        copyFollowupTemplate(inv);
+                                      }} title="Copy Email Template" />
                                       {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
                                   ) : row.invoiceGenerated ? (
@@ -2778,6 +2871,8 @@ ${generateInvoiceHtml(row)}
   
   const renderInvoices = () => {
     const invoiceMap = new Map();
+    
+    // Add invoices from masterData (new system)
     masterData.filter(r => r.invoiceGenerated).forEach(row => {
       if (!invoiceMap.has(row.invoiceNo)) {
         invoiceMap.set(row.invoiceNo, { 
@@ -2791,10 +2886,39 @@ ${generateInvoiceHtml(row)}
           receiptStatus: row.receiptStatus || 'Pending',
           receiptNo: row.receiptNo,
           campaigns: [row], 
-          totalAmount: parseFloat(row.invoiceTotalAmount) || 0 
+          totalAmount: parseFloat(row.invoiceTotalAmount) || 0,
+          isFromMaster: true
         });
       } else {
         invoiceMap.get(row.invoiceNo).campaigns.push(row);
+      }
+    });
+    
+    // Add historical invoices from ledgerEntries (excluding CNs)
+    ledgerEntries.filter(e => 
+      e.isHistorical && 
+      e.type !== 'creditnote' && 
+      !e.vchNo?.toUpperCase().startsWith('CN') &&
+      e.debit > 0
+    ).forEach(entry => {
+      if (!invoiceMap.has(entry.vchNo)) {
+        // Check if receipt exists for this historical invoice
+        const existingReceipt = receipts.find(r => r.invoiceNo === entry.vchNo);
+        invoiceMap.set(entry.vchNo, {
+          invoiceNo: entry.vchNo,
+          partyName: entry.partyName,
+          date: entry.date,
+          invoiceType: 'Historical',
+          combinationCode: '',
+          invoiceStatus: 'Approved', // Historical invoices are already approved
+          mailingSent: true,
+          receiptStatus: existingReceipt ? 'Received' : (entry.amountReceived > 0 ? 'Received' : 'Pending'),
+          receiptNo: existingReceipt?.receiptNo || entry.receiptNo || '',
+          campaigns: [],
+          totalAmount: parseFloat(entry.debit) || 0,
+          isHistorical: true,
+          historicalEntry: entry
+        });
       }
     });
     
@@ -3049,15 +3173,53 @@ ${generateInvoiceHtml(row)}
                           </td>
                           <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                             <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                              <ActionButton icon={Eye} small variant="brand" onClick={() => downloadInvoice(inv.campaigns[0])} title="View Invoice" />
-                              {canEdit && inv.invoiceStatus === 'Approved' && inv.mailingSent === 'Yes' && !invoiceReceipt && (
-                                <ActionButton icon={Receipt} small variant="success" onClick={() => openReceiptModal(inv.campaigns[0])} title="Create Receipt" />
-                              )}
-                              {canEdit && inv.invoiceStatus === 'Approved' && !invoiceCN && (
-                                <ActionButton icon={FileText} small variant="primary" onClick={() => openCreditNoteModal(inv.campaigns[0])} title="Credit Note" />
-                              )}
-                              {canEdit && (
-                                <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(inv.campaigns[0])} title="Delete Invoice" />
+                              {inv.isHistorical ? (
+                                <>
+                                  {/* Historical invoice actions */}
+                                  {canEdit && !invoiceReceipt && (
+                                    <ActionButton icon={Receipt} small variant="success" onClick={() => {
+                                      // Create a compatible object for historical invoice
+                                      const histObj = {
+                                        invoiceNo: inv.invoiceNo,
+                                        partyName: inv.partyName,
+                                        invoiceDate: inv.date,
+                                        invoiceTotalAmount: inv.totalAmount,
+                                        invoiceStatus: 'Approved',
+                                        mailingSent: 'Yes',
+                                        invoiceType: 'Historical',
+                                        isHistorical: true
+                                      };
+                                      openReceiptModal(histObj);
+                                    }} title="Create Receipt" />
+                                  )}
+                                  {canEdit && !invoiceCN && (
+                                    <ActionButton icon={FileText} small variant="primary" onClick={() => {
+                                      const histObj = {
+                                        invoiceNo: inv.invoiceNo,
+                                        partyName: inv.partyName,
+                                        invoiceDate: inv.date,
+                                        invoiceTotalAmount: inv.totalAmount,
+                                        invoiceStatus: 'Approved',
+                                        isHistorical: true
+                                      };
+                                      openCreditNoteModal(histObj);
+                                    }} title="Credit Note" />
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {/* System invoice actions */}
+                                  <ActionButton icon={Eye} small variant="brand" onClick={() => downloadInvoice(inv.campaigns[0])} title="View Invoice" />
+                                  {canEdit && inv.invoiceStatus === 'Approved' && inv.mailingSent === 'Yes' && !invoiceReceipt && (
+                                    <ActionButton icon={Receipt} small variant="success" onClick={() => openReceiptModal(inv.campaigns[0])} title="Create Receipt" />
+                                  )}
+                                  {canEdit && inv.invoiceStatus === 'Approved' && !invoiceCN && (
+                                    <ActionButton icon={FileText} small variant="primary" onClick={() => openCreditNoteModal(inv.campaigns[0])} title="Credit Note" />
+                                  )}
+                                  {canEdit && (
+                                    <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(inv.campaigns[0])} title="Delete Invoice" />
+                                  )}
+                                </>
                               )}
                             </div>
                           </td>

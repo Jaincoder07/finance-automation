@@ -1,6 +1,6 @@
 // Firebase Configuration
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, getDoc, collection, getDocs, deleteDoc, onSnapshot } from "firebase/firestore";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
 
 // Your web app's Firebase configuration
@@ -111,6 +111,18 @@ export const loadAppState = async (userId) => {
     console.error("Error loading app state:", error);
     return null;
   }
+};
+
+// Real-time listener for app state changes
+export const subscribeToAppState = (userId, callback) => {
+  const docRef = doc(db, "appState", userId);
+  return onSnapshot(docRef, (doc) => {
+    if (doc.exists()) {
+      callback(doc.data());
+    }
+  }, (error) => {
+    console.error("Error in real-time listener:", error);
+  });
 };
 
 export { db, auth, signInWithEmailAndPassword, signOut, onAuthStateChanged };
