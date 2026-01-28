@@ -2777,16 +2777,9 @@ ${generateInvoiceHtml(row)}
                                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                       <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
                                       <ActionButton icon={Mail} small variant="brand" onClick={() => {
-                                        // Generate email template
-                                        const inv = {
-                                          invoiceNo: row.invoiceNo,
-                                          partyName: row.partyName,
-                                          invoiceTotalAmount: row.invoiceTotalAmount,
-                                          invoiceDate: row.invoiceDate,
-                                          campaigns: [row]
-                                        };
-                                        copyFollowupTemplate(inv);
-                                      }} title="Copy Email Template" />
+                                        setSelectedRow(row);
+                                        setShowEmailModal(true);
+                                      }} title="Send Email" />
                                       {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
                                   ) : row.invoiceGenerated ? (
@@ -2894,7 +2887,33 @@ ${generateInvoiceHtml(row)}
       }
     });
     
-    // Add historical invoices from ledgerEntries (excluding CNs) - ONLY PENDING ONES
+    // Helper to extract year+suffix for CN matching
+    const getInvoiceYearSuffix = (vchNo) => {
+      if (!vchNo) return '';
+      const parts = vchNo.split('/');
+      if (parts.length >= 3) {
+        return parts.slice(1).join('/');
+      } else if (parts.length === 2) {
+        return parts.join('/');
+      }
+      return parts[parts.length - 1];
+    };
+    
+    // Build CN map for matching
+    const historicalCNs = ledgerEntries.filter(e => 
+      e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+    );
+    const cnMapForRegister = new Map();
+    creditNotes.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.invoiceNo);
+      if (key) cnMapForRegister.set(key, cn);
+    });
+    historicalCNs.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.vchNo);
+      if (key && !cnMapForRegister.has(key)) cnMapForRegister.set(key, cn);
+    });
+    
+    // Add historical invoices from ledgerEntries - ONLY PENDING or PARTIAL CN (not CN Closed)
     ledgerEntries.filter(e => 
       e.isHistorical && 
       e.type !== 'creditnote' && 
@@ -2904,22 +2923,38 @@ ${generateInvoiceHtml(row)}
       if (!invoiceMap.has(entry.vchNo)) {
         // Check if receipt exists for this historical invoice
         const existingReceipt = receipts.find(r => r.invoiceNo === entry.vchNo);
-        const isPending = !existingReceipt && !(entry.amountReceived > 0);
         
-        // Only add if pending (no receipt received)
-        if (isPending) {
+        // Check if fully covered by CN
+        const invYearSuffix = getInvoiceYearSuffix(entry.vchNo);
+        const matchingCN = cnMapForRegister.get(invYearSuffix);
+        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
+        const debit = parseFloat(entry.debit) || 0;
+        const isFullyCoveredByCN = matchingCN && cnAmount >= debit;
+        
+        // Skip if fully covered by CN (CN Closed)
+        if (isFullyCoveredByCN) return;
+        
+        const isPending = !existingReceipt && !(entry.amountReceived > 0);
+        const hasPartialCN = matchingCN && cnAmount > 0 && cnAmount < debit;
+        
+        // Only add if pending or partial CN (no receipt received and not fully covered by CN)
+        if (isPending || hasPartialCN) {
+          const pendingAmount = hasPartialCN ? debit - cnAmount : debit;
           invoiceMap.set(entry.vchNo, {
             invoiceNo: entry.vchNo,
             partyName: entry.partyName,
             date: entry.date,
             invoiceType: 'Historical',
             combinationCode: '',
-            invoiceStatus: 'Approved', // Historical invoices are already approved
+            invoiceStatus: 'Approved',
             mailingSent: 'Yes',
-            receiptStatus: 'Pending',
+            receiptStatus: hasPartialCN ? 'Partial CN' : 'Pending',
             receiptNo: '',
             campaigns: [],
-            totalAmount: parseFloat(entry.debit) || 0,
+            totalAmount: debit,
+            pendingAmount: pendingAmount,
+            hasPartialCN: hasPartialCN,
+            cnAmount: cnAmount,
             isHistorical: true,
             historicalEntry: entry
           });
