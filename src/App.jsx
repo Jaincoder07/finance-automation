@@ -427,6 +427,12 @@ export default function FinanceApp() {
   const [openingBalanceForm, setOpeningBalanceForm] = useState({ partyName: '', amount: '', type: 'Dr' });
   const [invoiceValues, setInvoiceValues] = useState({});
   
+  // Party Master Data (with GSTIN, State, etc.)
+  const [partyMaster, setPartyMaster] = useState({});
+  
+  // Historical Ledger Upload
+  const [showHistoricalLedgerModal, setShowHistoricalLedgerModal] = useState(false);
+  
   const [expandedParties, setExpandedParties] = useState(new Set());
   
   const [filters, setFilters] = useState({
@@ -444,6 +450,8 @@ export default function FinanceApp() {
   const pasteAreaRef = useRef(null);
   const paymentAdvisoryRef = useRef(null);
   const saveTimeoutRef = useRef(null);
+  const partyMasterInputRef = useRef(null);
+  const historicalLedgerInputRef = useRef(null);
 
   // ============================================
   // FIREBASE DATA PERSISTENCE
@@ -470,6 +478,7 @@ export default function FinanceApp() {
         if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
         if (data.notifications) setNotifications(data.notifications);
         if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
+        if (data.partyMaster) setPartyMaster(data.partyMaster);
         console.log('Data loaded from Firebase');
       }
     } catch (error) {
@@ -497,7 +506,8 @@ export default function FinanceApp() {
         nextCreditNoteNo,
         invoiceValues,
         notifications,
-        whatsappSettings
+        whatsappSettings,
+        partyMaster
       });
       setLastSaved(new Date());
       console.log('Data saved to Firebase');
@@ -505,7 +515,7 @@ export default function FinanceApp() {
       console.error('Error saving data:', error);
     }
     setIsSaving(false);
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster]);
 
   // Auto-save when data changes (debounced 2 seconds)
   useEffect(() => {
@@ -524,7 +534,7 @@ export default function FinanceApp() {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, isLoggedIn]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, isLoggedIn]);
 
   // ============================================
   // NOTIFICATION SYSTEM
@@ -1227,6 +1237,167 @@ export default function FinanceApp() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Invoice Values');
     XLSX.writeFile(wb, 'Invoice_Values_Template.xlsx');
+  };
+
+  // Party Master Upload Handler
+  const handlePartyMasterUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const workbook = XLSX.read(event.target.result, { type: 'binary' });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet);
+      
+      const newPartyMaster = { ...partyMaster };
+      let addedCount = 0;
+      
+      data.forEach(row => {
+        const partyName = row['Name of Ledger'] || row['Party Name'] || row['NAME OF LEDGER'] || row['PARTY NAME'] || '';
+        if (partyName.trim()) {
+          newPartyMaster[partyName.trim()] = {
+            ledgerGroup: row['Ledger Group'] || row['LEDGER GROUP'] || 'Sundry Debtors',
+            stateName: row['State Name'] || row['STATE NAME'] || '',
+            gstRegType: row['GST Registration Type'] || row['GST REGISTRATION TYPE'] || 'Regular',
+            gstin: row['GSTIN/UIN'] || row['GSTIN'] || row['GST'] || ''
+          };
+          addedCount++;
+        }
+      });
+      
+      setPartyMaster(newPartyMaster);
+      alert(`✅ Party Master Updated!\n\n${addedCount} parties loaded.`);
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
+  };
+
+  // Download Party Master Template
+  const downloadPartyMasterTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { 'Sl. No.': 1, 'Name of Ledger': 'ABC PRIVATE LIMITED', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Maharashtra', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '27AAACA1234A1ZQ' },
+      { 'Sl. No.': 2, 'Name of Ledger': 'XYZ MEDIA PVT LTD', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Delhi', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '07AAACX5678B1ZR' }
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Party Master');
+    XLSX.writeFile(wb, 'Party_Master_Template.xlsx');
+  };
+
+  // Historical Ledger Upload Handler
+  const handleHistoricalLedgerUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const workbook = XLSX.read(event.target.result, { type: 'binary', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      
+      const newLedgerEntries = [];
+      let addedCount = 0;
+      
+      data.forEach((row, index) => {
+        // Parse date
+        let dateValue = row['Date'] || row['DATE'] || '';
+        if (typeof dateValue === 'string' && dateValue) {
+          // Try to parse various date formats
+          const parts = dateValue.split(/[-\/]/);
+          if (parts.length === 3) {
+            // Handle DD-MMM-YY or DD-Mon-YY format
+            const months = { 'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06', 
+                           'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12' };
+            if (months[parts[1].toLowerCase().substring(0, 3)]) {
+              const year = parts[2].length === 2 ? (parseInt(parts[2]) > 50 ? '19' + parts[2] : '20' + parts[2]) : parts[2];
+              dateValue = `${year}-${months[parts[1].toLowerCase().substring(0, 3)]}-${parts[0].padStart(2, '0')}`;
+            }
+          }
+        }
+        
+        const particular = row['Particular'] || row['PARTICULAR'] || row['Particulars'] || row['PARTICULARS'] || '';
+        const vchType = row['Vch Type'] || row['VCH TYPE'] || row['Voucher Type'] || '';
+        const vchNo = row['Vch No.'] || row['VCH NO.'] || row['Voucher No'] || row['Invoice No'] || '';
+        const debit = parseFloat(row['Debit'] || row['DEBIT'] || 0) || 0;
+        const credit = parseFloat(row['Credit'] || row['CREDIT'] || 0) || 0;
+        const receiptDate = row['Date of Receipt'] || row['DATE OF RECEIPT'] || row['Receipt Date'] || '';
+        const amountReceived = parseFloat(row['Amount Received'] || row['AMOUNT RECEIVED'] || 0) || 0;
+        const tdsReceived = parseFloat(row['TDS amount Received'] || row['TDS Received'] || row['TDS'] || 0) || 0;
+        const balance = parseFloat(row['Balance'] || row['BALANCE'] || 0) || 0;
+        const paymentStatus = row['Payment Status'] || row['PAYMENT STATUS'] || row['Status'] || '';
+        
+        // Skip sub-rows (rows without date that are line item details)
+        if (!dateValue && (particular.includes('PROMOTIONAL') || particular.includes('IGST') || particular.includes('CGST') || particular.includes('SGST'))) {
+          return;
+        }
+        
+        // Skip if no meaningful data
+        if (!particular && !vchNo) return;
+        
+        // Determine entry type
+        let entryType = 'historical';
+        if (vchType.toLowerCase().includes('credit note')) {
+          entryType = 'creditnote';
+        } else if (vchType.toLowerCase().includes('receipt') || amountReceived > 0) {
+          entryType = 'receipt';
+        } else if (vchType.toLowerCase().includes('sale') || debit > 0) {
+          entryType = 'invoice';
+        }
+        
+        newLedgerEntries.push({
+          id: Date.now() + index,
+          partyName: particular || selectedParty,
+          date: dateValue,
+          particulars: particular,
+          narration: `${vchNo}${paymentStatus ? ' - ' + paymentStatus : ''}`,
+          vchType: vchType,
+          vchNo: vchNo,
+          debit: debit,
+          credit: credit,
+          receiptDate: receiptDate,
+          amountReceived: amountReceived,
+          tdsReceived: tdsReceived,
+          balance: balance,
+          paymentStatus: paymentStatus,
+          type: entryType,
+          isHistorical: true
+        });
+        addedCount++;
+      });
+      
+      if (addedCount > 0) {
+        setLedgerEntries(prev => [...prev, ...newLedgerEntries]);
+        alert(`✅ Historical Ledger Uploaded!\n\n${addedCount} entries added for ${selectedParty || 'all parties'}.`);
+      } else {
+        alert('⚠️ No valid ledger entries found in the file.');
+      }
+    };
+    reader.readAsBinaryString(file);
+    e.target.value = '';
+    setShowHistoricalLedgerModal(false);
+  };
+
+  // Download Historical Ledger Template
+  const downloadHistoricalLedgerTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { 'Date': '02-Jun-21', 'Particular': 'ABC Corp Ltd.', 'Vch Type': 'Sales', 'Vch No.': 'MB/2020-21/0411', 'Debit': 6000, 'Credit': '', 'Date of Receipt': '', 'Amount Received': 44371, 'TDS amount Received': 5880, 'Balance': '', 'Payment Status': 'Received' },
+      { 'Date': '', 'Particular': 'PROMOTIONAL TRADE EMAILERS', 'Vch Type': '', 'Vch No.': '', 'Debit': '', 'Credit': 22500, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
+      { 'Date': '', 'Particular': 'IGST', 'Vch Type': '', 'Vch No.': '', 'Debit': '', 'Credit': 4050, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
+      { 'Date': '26-Mar-25', 'Particular': 'ABC Corp Ltd.', 'Vch Type': 'Credit Note', 'Vch No.': 'CN/2022-23/128', 'Debit': '', 'Credit': 26550, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Historical Ledger');
+    XLSX.writeFile(wb, 'Historical_Ledger_Template.xlsx');
+  };
+
+  // View invoice from ledger
+  const viewInvoiceFromLedger = (invoiceNo) => {
+    const invoiceRow = masterData.find(r => r.invoiceNo === invoiceNo);
+    if (invoiceRow) {
+      downloadInvoice(invoiceRow);
+    } else {
+      alert('Invoice not found in system. This may be a historical entry.');
+    }
   };
 
   const handleExcelUpload = (e) => {
@@ -3052,6 +3223,7 @@ ${generateInvoiceHtml(row)}
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>📚 Party Ledgers</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
+            {canEdit && <ActionButton icon={Upload} label="Import Historical" variant="brand" onClick={() => setShowHistoricalLedgerModal(true)} />}
             {canEdit && <ActionButton icon={Plus} label="Opening Balance" variant="primary" onClick={() => setShowOpeningBalanceModal(true)} />}
           </div>
         </div>
@@ -3210,7 +3382,28 @@ ${generateInvoiceHtml(row)}
                                   </span>
                                 )}
                               </td>
-                              <td style={{ padding: '8px', fontWeight: '600', color: '#2874A6', borderRight: '1px solid #E2E8F0' }}>{entry.vchNo}</td>
+                              <td style={{ padding: '8px', borderRight: '1px solid #E2E8F0' }}>
+                                {entry.vchNo && entry.isInvoice ? (
+                                  <button 
+                                    onClick={() => viewInvoiceFromLedger(entry.vchNo)}
+                                    style={{ 
+                                      background: 'none', 
+                                      border: 'none', 
+                                      padding: 0, 
+                                      fontWeight: '600', 
+                                      color: '#2874A6', 
+                                      cursor: 'pointer', 
+                                      textDecoration: 'underline',
+                                      fontSize: '11px'
+                                    }}
+                                    title="Click to view invoice"
+                                  >
+                                    {entry.vchNo}
+                                  </button>
+                                ) : (
+                                  <span style={{ fontWeight: '600', color: entry.isCreditNote ? '#DC2626' : '#2874A6' }}>{entry.vchNo}</span>
+                                )}
+                              </td>
                               <td style={{ padding: '8px', textAlign: 'right', fontWeight: '600', borderRight: '1px solid #E2E8F0' }}>{entry.debit > 0 ? formatCurrencyShort(entry.debit) : ''}</td>
                               <td style={{ padding: '8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}></td>
                               <td style={{ padding: '8px', textAlign: 'center', borderRight: '1px solid #E2E8F0' }}>{entry.receiptDate ? formatDate(entry.receiptDate) : ''}</td>
@@ -3424,6 +3617,39 @@ ${generateInvoiceHtml(row)}
             </div>
           )}
         </Card>
+        
+        {/* Party Master Upload */}
+        <Card title="👥 Party Master">
+          <input type="file" ref={partyMasterInputRef} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handlePartyMasterUpload} />
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+            <ActionButton icon={Upload} label="Upload Parties" variant="brand" small onClick={() => partyMasterInputRef.current?.click()} />
+            <ActionButton icon={Download} label="Template" small onClick={downloadPartyMasterTemplate} />
+          </div>
+          <div style={{ padding: '10px', backgroundColor: '#EFF6FF', borderRadius: '8px', fontSize: '12px', color: '#1E40AF', marginBottom: '12px' }}>
+            <strong>Upload Format:</strong> Name of Ledger, Ledger Group, State Name, GST Registration Type, GSTIN/UIN
+          </div>
+          {Object.keys(partyMaster).length > 0 && (
+            <div style={{ maxHeight: '150px', overflowY: 'auto', border: '1px solid #E2E8F0', borderRadius: '8px' }}>
+              {Object.entries(partyMaster).slice(0, 20).map(([party, data]) => (
+                <div key={party} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 12px', borderBottom: '1px solid #F1F5F9', fontSize: '11px' }}>
+                  <span style={{ fontWeight: '600' }}>{party.length > 30 ? party.substring(0, 30) + '...' : party}</span>
+                  <span style={{ color: '#64748B' }}>{data.stateName || '-'} | {data.gstin ? data.gstin.substring(0, 10) + '...' : '-'}</span>
+                </div>
+              ))}
+              {Object.keys(partyMaster).length > 20 && (
+                <div style={{ padding: '8px 12px', textAlign: 'center', color: '#64748B', fontSize: '11px' }}>
+                  ... and {Object.keys(partyMaster).length - 20} more parties
+                </div>
+              )}
+            </div>
+          )}
+          {Object.keys(partyMaster).length === 0 && (
+            <div style={{ padding: '20px', textAlign: 'center', color: '#94A3B8', fontSize: '13px' }}>
+              No party master uploaded yet
+            </div>
+          )}
+        </Card>
+        
         <Card title="🗑️ Data Management">
           <div style={{ padding: '16px', backgroundColor: '#FEF2F2', borderRadius: '10px', border: '1px solid #FCA5A5', marginBottom: '16px' }}>
             <div style={{ fontWeight: '700', color: '#991B1B', fontSize: '14px', marginBottom: '8px' }}>⚠️ Danger Zone</div>
@@ -3839,6 +4065,79 @@ ${generateInvoiceHtml(row)}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
           <ActionButton label="Cancel" onClick={() => setShowOpeningBalanceModal(false)} />
           <ActionButton label="Save" variant="brand" onClick={() => { if (openingBalanceForm.partyName && openingBalanceForm.amount) { setOpeningBalances(prev => ({ ...prev, [openingBalanceForm.partyName]: openingBalanceForm.type === 'Dr' ? parseFloat(openingBalanceForm.amount) : -parseFloat(openingBalanceForm.amount) })); setShowOpeningBalanceModal(false); setOpeningBalanceForm({ partyName: '', amount: '', type: 'Dr' }); } }} />
+        </div>
+      </Modal>
+
+      {/* Historical Ledger Upload Modal */}
+      <Modal isOpen={showHistoricalLedgerModal} onClose={() => setShowHistoricalLedgerModal(false)} title="📂 Import Historical Ledger" width="600px">
+        <input type="file" ref={historicalLedgerInputRef} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleHistoricalLedgerUpload} />
+        
+        <div style={{ padding: '16px', backgroundColor: '#EFF6FF', borderRadius: '10px', marginBottom: '16px', border: '1px solid #BFDBFE' }}>
+          <div style={{ fontWeight: '700', color: '#1E40AF', marginBottom: '8px', fontSize: '14px' }}>📋 How to Import Historical Ledger</div>
+          <div style={{ fontSize: '12px', color: '#1E3A8A', lineHeight: '1.6' }}>
+            <p style={{ margin: '0 0 8px 0' }}>Upload your existing ledger data in the format shown in the template. This will import all historical transactions.</p>
+            <p style={{ margin: 0 }}><strong>Supported columns:</strong> Date, Particular, Vch Type, Vch No., Debit, Credit, Date of Receipt, Amount Received, TDS Received, Balance, Payment Status</p>
+          </div>
+        </div>
+        
+        {selectedParty && (
+          <div style={{ padding: '12px', backgroundColor: '#DCFCE7', borderRadius: '8px', marginBottom: '16px', border: '1px solid #86EFAC' }}>
+            <div style={{ fontSize: '13px', color: '#166534' }}>
+              <strong>Selected Party:</strong> {selectedParty}
+            </div>
+            <div style={{ fontSize: '11px', color: '#15803D', marginTop: '4px' }}>
+              Entries will be imported for this party
+            </div>
+          </div>
+        )}
+        
+        {!selectedParty && (
+          <div style={{ padding: '12px', backgroundColor: '#FEF3C7', borderRadius: '8px', marginBottom: '16px', border: '1px solid #FCD34D' }}>
+            <div style={{ fontSize: '13px', color: '#92400E' }}>
+              <strong>Tip:</strong> Select a party from the ledger list first, then import their historical data.
+            </div>
+          </div>
+        )}
+        
+        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginBottom: '16px' }}>
+          <ActionButton icon={Download} label="Download Template" variant="brand" onClick={downloadHistoricalLedgerTemplate} />
+          <ActionButton icon={Upload} label="Upload Ledger" variant="success" onClick={() => historicalLedgerInputRef.current?.click()} />
+        </div>
+        
+        <div style={{ padding: '14px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+          <div style={{ fontWeight: '600', color: '#475569', marginBottom: '8px', fontSize: '13px' }}>📊 Expected Format (matches your ledger export):</div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+              <thead>
+                <tr style={{ backgroundColor: '#E2E8F0' }}>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'left' }}>Date</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'left' }}>Particular</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'left' }}>Vch Type</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'left' }}>Vch No.</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'right' }}>Debit</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'right' }}>Credit</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'right' }}>Amt Recd</th>
+                  <th style={{ padding: '6px', border: '1px solid #CBD5E1', textAlign: 'left' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}>02-Jun-21</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}>DB Corp Ltd</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}>Sales</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}>MB/2020-21/0411</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0', textAlign: 'right' }}>6,000</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}></td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0', textAlign: 'right' }}>44,371</td>
+                  <td style={{ padding: '4px 6px', border: '1px solid #E2E8F0' }}>Received</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
+          <ActionButton label="Close" onClick={() => setShowHistoricalLedgerModal(false)} />
         </div>
       </Modal>
 
