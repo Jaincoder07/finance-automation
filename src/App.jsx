@@ -540,7 +540,7 @@ export default function FinanceApp() {
     setIsSaving(false);
   }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups]);
 
-  // Auto-save when data changes (debounced 2 seconds)
+  // Auto-save when data changes (debounced 1 second for faster sync)
   useEffect(() => {
     if (!isLoggedIn) return;
     
@@ -556,7 +556,7 @@ export default function FinanceApp() {
       if (!isReceivingUpdateRef.current) {
         saveDataToFirebase();
       }
-    }, 2000);
+    }, 1000);
     
     return () => {
       if (saveTimeoutRef.current) {
@@ -993,8 +993,8 @@ export default function FinanceApp() {
     // Notify finance about approval
     addNotification('approval', `✅ Invoice ${selectedRow.invoiceNo} has been APPROVED by Director - ready for mailing`, 'finance');
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     setShowApprovalModal(false);
     setSelectedRow(null);
@@ -1025,8 +1025,8 @@ export default function FinanceApp() {
     // Notify finance about edits needed
     addNotification('edit', `✏️ Invoice ${selectedRow.invoiceNo} marked as NEED EDITS by Director: "${editComments}"`, 'finance');
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     setShowApprovalModal(false);
     setSelectedRow(null);
@@ -1167,8 +1167,8 @@ export default function FinanceApp() {
     // Notify director about payment received
     addNotification('receipt', `💰 Payment received for ${selectedRow.partyName} - Receipt ${receiptNo} - ${formatCurrency(totalCredit)}`, 'director');
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     setShowReceiptModal(false);
     setSelectedRow(null);
@@ -1241,8 +1241,8 @@ export default function FinanceApp() {
     setSelectedRow(null);
     setCreditNoteForm({ amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0] });
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     let alertMsg = `✅ Credit Note Created!\n\nCredit Note No: ${creditNoteNo}`;
     if (creditAmount > 0) alertMsg += `\nBase Amount: ${formatCurrency(creditAmount)}`;
@@ -1978,8 +1978,8 @@ Phone: ${companyConfig.phone}`;
     // Notify director about new invoice
     addNotification('invoice', `🧾 New Invoice ${invoiceNo} created for ${row.partyName} - ${formatCurrency(totalAmount)}`, 'director');
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     alert(`✅ Invoice Generated!\n\nInvoice No: ${invoiceNo}\nAmount: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
   };
@@ -2016,8 +2016,8 @@ Phone: ${companyConfig.phone}`;
     // Notify director about new combined invoice
     addNotification('invoice', `🧾 Combined Invoice ${invoiceNo} created for ${combineParty} (${selectedRows.length} campaigns) - ${formatCurrency(totalAmount)}`, 'director');
     
-    // Immediate save to Firebase for critical action
-    setTimeout(() => saveDataToFirebase(), 100);
+    // Data will auto-save in 1 second
+    // Auto-save will handle this
     
     setCombineParty(null);
     alert(`✅ Combined Invoice Generated!\n\nInvoice No: ${invoiceNo}\nCampaigns: ${selectedForCombine.size}\nTotal: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
@@ -2894,7 +2894,7 @@ ${generateInvoiceHtml(row)}
       }
     });
     
-    // Add historical invoices from ledgerEntries (excluding CNs)
+    // Add historical invoices from ledgerEntries (excluding CNs) - ONLY PENDING ONES
     ledgerEntries.filter(e => 
       e.isHistorical && 
       e.type !== 'creditnote' && 
@@ -2904,21 +2904,26 @@ ${generateInvoiceHtml(row)}
       if (!invoiceMap.has(entry.vchNo)) {
         // Check if receipt exists for this historical invoice
         const existingReceipt = receipts.find(r => r.invoiceNo === entry.vchNo);
-        invoiceMap.set(entry.vchNo, {
-          invoiceNo: entry.vchNo,
-          partyName: entry.partyName,
-          date: entry.date,
-          invoiceType: 'Historical',
-          combinationCode: '',
-          invoiceStatus: 'Approved', // Historical invoices are already approved
-          mailingSent: true,
-          receiptStatus: existingReceipt ? 'Received' : (entry.amountReceived > 0 ? 'Received' : 'Pending'),
-          receiptNo: existingReceipt?.receiptNo || entry.receiptNo || '',
-          campaigns: [],
-          totalAmount: parseFloat(entry.debit) || 0,
-          isHistorical: true,
-          historicalEntry: entry
-        });
+        const isPending = !existingReceipt && !(entry.amountReceived > 0);
+        
+        // Only add if pending (no receipt received)
+        if (isPending) {
+          invoiceMap.set(entry.vchNo, {
+            invoiceNo: entry.vchNo,
+            partyName: entry.partyName,
+            date: entry.date,
+            invoiceType: 'Historical',
+            combinationCode: '',
+            invoiceStatus: 'Approved', // Historical invoices are already approved
+            mailingSent: 'Yes',
+            receiptStatus: 'Pending',
+            receiptNo: '',
+            campaigns: [],
+            totalAmount: parseFloat(entry.debit) || 0,
+            isHistorical: true,
+            historicalEntry: entry
+          });
+        }
       }
     });
     
