@@ -327,8 +327,8 @@ export default function FinanceApp() {
   };
 
   const [companyConfig, setCompanyConfig] = useState({
-    name: 'INDREESH MEDIA LLP',
-    brand: 'MEDIABRIEF',
+    name: 'JAC Finance Automation',
+    brand: 'JAC',
     address: 'A-1701 Sweet Home CHS LTD, SVP, Plot No: 24',
     addressLine2: 'Andheri West, Nr Last Bus St',
     city: 'Mumbai-400053',
@@ -344,7 +344,7 @@ export default function FinanceApp() {
       account: '921020009075531',
       branch: 'Andheri',
       ifsc: 'UTIB0000020',
-      holder: 'INDREESH MEDIA LLP'
+      holder: 'JAC Finance Automation'
     },
     invoicePrefix: 'MB/2025-26/',
     hsnCode: '998365',
@@ -615,7 +615,7 @@ export default function FinanceApp() {
       alert('Please enter phone number and API key first');
       return;
     }
-    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from INDREESH MEDIA Finance App. WhatsApp notifications are working!');
+    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from JAC Finance Automation. WhatsApp notifications are working!');
     alert('Test message sent! Check your WhatsApp.');
   };
   
@@ -1381,7 +1381,7 @@ export default function FinanceApp() {
 
 Dear Sir/Madam,
 
-Greetings from INDREESH MEDIA LLP!
+Greetings from ${companyConfig.name}!
 
 This is a gentle reminder regarding the outstanding payment for:
 
@@ -1396,9 +1396,9 @@ For any queries, please feel free to reach out.
 
 Thanks & Regards,
 Finance Team
-INDREESH MEDIA LLP
-Email: alliances@mediabrief.com
-Phone: +91 7021911036`;
+${companyConfig.name}
+Email: ${companyConfig.email}
+Phone: ${companyConfig.phone}`;
 
     return template;
   };
@@ -2114,9 +2114,8 @@ ${companyConfig.email}`;
     const mailerPagesHtml = allMailerImages.map(({ img, campaign }) => `
       <div class="page-break-before" style="page-break-before: always; padding: 40px; text-align: center; background: white;">
         ${mailerLogo ? `<div style="margin-bottom: 20px;"><img src="${mailerLogo}" alt="Logo" style="max-height: 70px;" /></div>` : `
-          <div style="display: flex; align-items: center; justify-content: center; gap: 15px; margin-bottom: 25px;">
-            <div style="width: 55px; height: 55px; border-radius: 50%; background: #2874A6; color: white; font-size: 24px; font-weight: bold; font-style: italic; display: flex; align-items: center; justify-content: center;">im</div>
-            <span style="font-size: 22px; font-weight: bold; color: #2874A6;">INDREESH MEDIA LLP</span>
+          <div style="text-align: center; margin-bottom: 25px;">
+            <span style="font-size: 22px; font-weight: bold; color: #2874A6;">${companyConfig.name}</span>
           </div>
         `}
         <h2 style="font-size: 20px; text-decoration: underline; margin: 25px 0;">MAILER SUPPORTING</h2>
@@ -2301,7 +2300,7 @@ ${generateInvoiceHtml(row)}
     return (
       <div style={{ width: sidebarCollapsed ? '60px' : '200px', backgroundColor: '#1E293B', color: '#FFFFFF', display: 'flex', flexDirection: 'column', transition: 'width 0.2s ease', flexShrink: 0 }}>
         <div style={{ padding: sidebarCollapsed ? '12px' : '16px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: sidebarCollapsed ? 'center' : 'space-between' }}>
-          {!sidebarCollapsed && <div><div style={{ fontSize: '15px', fontWeight: '700' }}>INDREESH MEDIA</div><div style={{ fontSize: '10px', color: '#94A3B8' }}>{userRole === 'director' ? 'Director View' : 'Finance Team'}</div></div>}
+          {!sidebarCollapsed && <div><div style={{ fontSize: '15px', fontWeight: '700' }}>JAC Finance</div><div style={{ fontSize: '10px', color: '#94A3B8' }}>{userRole === 'director' ? 'Director View' : 'Finance Team'}</div></div>}
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', padding: '4px' }}>
             {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
@@ -3352,8 +3351,13 @@ ${generateInvoiceHtml(row)}
       }
     });
     
-    // Closing balance = runningBalance after all entries
-    const closingBalance = runningBalance;
+    // Closing balance = sum of individual balance values (not runningBalance)
+    const closingBalance = pdfRows.reduce((sum, row) => {
+      if (row.isMain && typeof row.balance === 'number' && row.balance > 0) {
+        return sum + row.balance;
+      }
+      return sum;
+    }, 0);
     
     // Get party address
     const partyRow = masterData.find(r => r.partyName === selectedParty) || partyMaster.find(p => p.partyName === selectedParty);
@@ -3831,6 +3835,14 @@ ${generateInvoiceHtml(row)}
         }
       });
       
+      // Calculate closing balance as sum of individual balances
+      const sumOfBalances = entries.reduce((sum, entry) => {
+        if (typeof entry.balance === 'number' && entry.balance > 0) {
+          return sum + entry.balance;
+        }
+        return sum;
+      }, 0);
+      
       return {
         entries,
         totals: {
@@ -3838,7 +3850,7 @@ ${generateInvoiceHtml(row)}
           credit: totalCredit,
           received: totalReceived,
           tds: totalTds,
-          balance: runningBalance
+          balance: sumOfBalances
         }
       };
     };
@@ -4172,7 +4184,8 @@ ${generateInvoiceHtml(row)}
         }
       }
     });
-    return Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate));
+    // Sort by party name (alphabetically)
+    return Array.from(invoiceMap.values()).sort((a, b) => a.partyName.localeCompare(b.partyName));
   }, [masterData, receipts, creditNotes]);
   
   const followupsByInvoice = useMemo(() => {
@@ -4199,6 +4212,7 @@ ${generateInvoiceHtml(row)}
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>📞 Followups</h1>
+          {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
         </div>
         
         {/* Upcoming Followups */}
@@ -4275,7 +4289,7 @@ ${generateInvoiceHtml(row)}
                         </td>
                         <td style={{ padding: '10px 12px', textAlign: 'center' }}>
                           <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                            <ActionButton icon={Plus} small variant="primary" onClick={() => openFollowupModal(inv)} title="Add Followup" />
+                            {canEdit && <ActionButton icon={Plus} small variant="primary" onClick={() => openFollowupModal(inv)} title="Add Followup" />}
                             <ActionButton icon={Clipboard} small variant="brand" onClick={() => copyFollowupTemplate(inv)} title="Copy Email Template" />
                             <ActionButton icon={Mail} small variant="success" onClick={() => openGmailWithFollowup(inv)} title="Search in Gmail" />
                           </div>
@@ -5357,8 +5371,7 @@ ${generateInvoiceHtml(row)}
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       <div style={{ backgroundColor: '#FFFFFF', padding: '40px', borderRadius: '16px', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', width: '400px', maxWidth: '95vw' }}>
         <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <div style={{ width: '70px', height: '70px', borderRadius: '50%', background: 'linear-gradient(135deg, #2874A6, #1a5276)', color: 'white', fontSize: '28px', fontWeight: 'bold', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>im</div>
-          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#1E293B' }}>INDREESH MEDIA LLP</h1>
+          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#1E293B' }}>JAC Finance Automation</h1>
           <p style={{ margin: '8px 0 0', color: '#64748B', fontSize: '14px' }}>Finance Management System</p>
         </div>
         
@@ -5397,14 +5410,6 @@ ${generateInvoiceHtml(row)}
         >
           Login
         </button>
-        
-        <div style={{ marginTop: '24px', padding: '16px', backgroundColor: '#F8FAFC', borderRadius: '10px', fontSize: '12px', color: '#64748B' }}>
-          <div style={{ fontWeight: '600', marginBottom: '8px', color: '#475569' }}>Demo Credentials:</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <div><strong>Finance:</strong> finance / finance123</div>
-            <div><strong>Director:</strong> director / director123</div>
-          </div>
-        </div>
       </div>
     </div>
   );
