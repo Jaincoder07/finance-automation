@@ -3085,12 +3085,6 @@ ${generateInvoiceHtml(row)}
     // Use the same buildDetailedLedger logic
     const opening = openingBalances[selectedParty] || 0;
     
-    const getInvoiceSuffix = (vchNo) => {
-      if (!vchNo) return '';
-      const parts = vchNo.split('/');
-      return parts[parts.length - 1];
-    };
-    
     // Get all invoices from masterData
     const partyInvoices = masterData.filter(r => 
       r.partyName === selectedParty && 
@@ -3125,18 +3119,32 @@ ${generateInvoiceHtml(row)}
     const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
     const systemCNs = creditNotes.filter(cn => cn.partyName === selectedParty);
     
-    // Build CN map by suffix
-    const creditNoteByInvoiceSuffix = new Map();
+    // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272" or "CN/2022-23/272")
+    const getInvoiceYearSuffix = (vchNo) => {
+      if (!vchNo) return '';
+      const parts = vchNo.split('/');
+      if (parts.length >= 3) {
+        // Return year + suffix: "2022-23/272"
+        return parts.slice(1).join('/');
+      } else if (parts.length === 2) {
+        return parts.join('/');
+      }
+      return parts[parts.length - 1];
+    };
+    
+    // Build CN map by year+suffix (not just suffix)
+    const creditNoteByYearSuffix = new Map();
     systemCNs.forEach(cn => {
-      const suffix = getInvoiceSuffix(cn.creditNoteNo || cn.invoiceNo);
-      if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-        creditNoteByInvoiceSuffix.set(suffix, { ...cn, isSystemCN: true });
+      // For system CNs, use the original invoiceNo for matching
+      const key = getInvoiceYearSuffix(cn.invoiceNo);
+      if (key && !creditNoteByYearSuffix.has(key)) {
+        creditNoteByYearSuffix.set(key, { ...cn, isSystemCN: true });
       }
     });
     historicalCNs.forEach(cn => {
-      const suffix = getInvoiceSuffix(cn.vchNo);
-      if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-        creditNoteByInvoiceSuffix.set(suffix, { ...cn, isHistoricalCN: true });
+      const key = getInvoiceYearSuffix(cn.vchNo);
+      if (key && !creditNoteByYearSuffix.has(key)) {
+        creditNoteByYearSuffix.set(key, { ...cn, isHistoricalCN: true });
       }
     });
     
@@ -3147,7 +3155,7 @@ ${generateInvoiceHtml(row)}
     let totalReceived = 0;
     let totalTds = 0;
     let runningBalance = opening;
-    const processedCNSuffixes = new Set();
+    const processedCNKeys = new Set();
     
     // Opening balance
     if (opening !== 0) {
@@ -3208,8 +3216,8 @@ ${generateInvoiceHtml(row)}
         const igst = isSameState ? 0 : baseAmount * 0.18;
         const totalAmount = baseAmount + cgst + sgst + igst;
         
-        const invSuffix = getInvoiceSuffix(inv.invoiceNo);
-        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+        const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
         const hasCN = !!matchingCN;
         
         const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
@@ -3253,8 +3261,8 @@ ${generateInvoiceHtml(row)}
         }
         
         // Add CN right after invoice
-        if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
-          processedCNSuffixes.add(invSuffix);
+        if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+          processedCNKeys.add(invYearSuffix);
           // CN amounts may be negative, use Math.abs for display
           const cnAmount = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
           runningBalance -= cnAmount;
@@ -3287,8 +3295,8 @@ ${generateInvoiceHtml(row)}
         const debit = entry.debit || 0;
         const credit = entry.credit || 0;
         
-        const invSuffix = getInvoiceSuffix(entry.vchNo);
-        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const invYearSuffix = getInvoiceYearSuffix(entry.vchNo);
+        const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
         const hasCN = !!matchingCN;
         
         runningBalance += debit - credit;
@@ -3320,8 +3328,8 @@ ${generateInvoiceHtml(row)}
         }
         
         // Add CN right after historical invoice
-        if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
-          processedCNSuffixes.add(invSuffix);
+        if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+          processedCNKeys.add(invYearSuffix);
           // CN amounts may be negative, use Math.abs for display
           const cnAmount = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
           runningBalance -= cnAmount;
@@ -3533,24 +3541,31 @@ ${generateInvoiceHtml(row)}
         e.partyName === party && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
       
-      // Build CN map by suffix
-      const getInvoiceSuffix = (vchNo) => {
+      // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
+      const getInvoiceYearSuffix = (vchNo) => {
         if (!vchNo) return '';
         const parts = vchNo.split('/');
+        if (parts.length >= 3) {
+          return parts.slice(1).join('/');
+        } else if (parts.length === 2) {
+          return parts.join('/');
+        }
         return parts[parts.length - 1];
       };
       
-      const creditNoteByInvoiceSuffix = new Map();
+      // Build CN map by year+suffix
+      const creditNoteByYearSuffix = new Map();
       partyCreditNotes.forEach(cn => {
-        const suffix = getInvoiceSuffix(cn.creditNoteNo || cn.invoiceNo);
-        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-          creditNoteByInvoiceSuffix.set(suffix, cn);
+        // For system CNs, use the original invoiceNo for matching
+        const key = getInvoiceYearSuffix(cn.invoiceNo);
+        if (key && !creditNoteByYearSuffix.has(key)) {
+          creditNoteByYearSuffix.set(key, cn);
         }
       });
       historicalCNs.forEach(cn => {
-        const suffix = getInvoiceSuffix(cn.vchNo);
-        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-          creditNoteByInvoiceSuffix.set(suffix, cn);
+        const key = getInvoiceYearSuffix(cn.vchNo);
+        if (key && !creditNoteByYearSuffix.has(key)) {
+          creditNoteByYearSuffix.set(key, cn);
         }
       });
       
@@ -3563,8 +3578,8 @@ ${generateInvoiceHtml(row)}
       Array.from(invoiceMap.values()).forEach(inv => {
         const totalAmount = inv.totalAmount; // Use actual invoiceTotalAmount
         
-        const invSuffix = getInvoiceSuffix(inv.invoiceNo);
-        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+        const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
         // CN amounts may be negative, use Math.abs to get positive value for comparison
         const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || 0) : 0;
         const isFullyCoveredByCN = matchingCN && cnAmount >= totalAmount;
@@ -3585,8 +3600,8 @@ ${generateInvoiceHtml(row)}
       
       // Calculate balance for historical invoices
       historicalInvoices.forEach(entry => {
-        const invSuffix = getInvoiceSuffix(entry.vchNo);
-        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const invYearSuffix = getInvoiceYearSuffix(entry.vchNo);
+        const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
         // CN amounts may be negative, use Math.abs to get positive value for comparison
         const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
         const debit = parseFloat(entry.debit) || 0;
@@ -3621,10 +3636,15 @@ ${generateInvoiceHtml(row)}
       
       const opening = openingBalances[selectedParty] || 0;
       
-      // Helper to extract invoice number suffix (e.g., "128" from "MB/2022-23/128" or "CN/2022-23/128")
-      const getInvoiceSuffix = (vchNo) => {
+      // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
+      const getInvoiceYearSuffix = (vchNo) => {
         if (!vchNo) return '';
         const parts = vchNo.split('/');
+        if (parts.length >= 3) {
+          return parts.slice(1).join('/');
+        } else if (parts.length === 2) {
+          return parts.join('/');
+        }
         return parts[parts.length - 1];
       };
       
@@ -3672,22 +3692,22 @@ ${generateInvoiceHtml(row)}
       // Get credit notes from creditNotes state only (not ledgerEntries to avoid duplicates)
       const systemCNs = creditNotes.filter(cn => cn.partyName === selectedParty);
       
-      // Create a map of ALL credit notes by invoice suffix (combine system + historical)
-      const creditNoteByInvoiceSuffix = new Map();
+      // Create a map of ALL credit notes by year+suffix (combine system + historical)
+      const creditNoteByYearSuffix = new Map();
       
-      // Add system credit notes
+      // Add system credit notes - use invoiceNo for matching
       systemCNs.forEach(cn => {
-        const suffix = getInvoiceSuffix(cn.creditNoteNo || cn.invoiceNo);
-        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-          creditNoteByInvoiceSuffix.set(suffix, { ...cn, isSystemCN: true });
+        const key = getInvoiceYearSuffix(cn.invoiceNo);
+        if (key && !creditNoteByYearSuffix.has(key)) {
+          creditNoteByYearSuffix.set(key, { ...cn, isSystemCN: true });
         }
       });
       
       // Add historical credit notes
       historicalCNs.forEach(cn => {
-        const suffix = getInvoiceSuffix(cn.vchNo);
-        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
-          creditNoteByInvoiceSuffix.set(suffix, { ...cn, isHistoricalCN: true });
+        const key = getInvoiceYearSuffix(cn.vchNo);
+        if (key && !creditNoteByYearSuffix.has(key)) {
+          creditNoteByYearSuffix.set(key, { ...cn, isHistoricalCN: true });
         }
       });
       
@@ -3698,7 +3718,7 @@ ${generateInvoiceHtml(row)}
       let totalCredit = 0;
       let totalReceived = 0;
       let totalTds = 0;
-      const processedCNSuffixes = new Set();
+      const processedCNKeys = new Set();
       
       // Add opening balance if exists
       if (opening !== 0) {
@@ -3769,9 +3789,9 @@ ${generateInvoiceHtml(row)}
           const igst = isSameState ? 0 : baseAmount * 0.18;
           const totalAmount = baseAmount + cgst + sgst + igst;
           
-          // Check for matching credit note by suffix
-          const invSuffix = getInvoiceSuffix(inv.invoiceNo);
-          const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+          // Check for matching credit note by year+suffix
+          const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+          const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
           // CN amounts may be negative, use Math.abs to get positive value for comparison
           const cnAmount = matchingCN ? Math.abs(matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
@@ -3847,8 +3867,8 @@ ${generateInvoiceHtml(row)}
           });
           
           // Add credit note entry RIGHT AFTER invoice if exists
-          if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
-            processedCNSuffixes.add(invSuffix);
+          if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+            processedCNKeys.add(invYearSuffix);
             // CN amounts may be negative, use Math.abs for display
             const cnAmountDisplay = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
             runningBalance -= cnAmountDisplay;
@@ -3871,7 +3891,7 @@ ${generateInvoiceHtml(row)}
             }
             
             entries.push({
-              id: matchingCN.id || matchingCN.creditNoteNo || `cn-${invSuffix}`,
+              id: matchingCN.id || matchingCN.creditNoteNo || `cn-${invYearSuffix}`,
               date: matchingCN.date,
               particular: selectedParty,
               vchType: 'Credit Note',
@@ -3893,9 +3913,9 @@ ${generateInvoiceHtml(row)}
           const debit = entry.debit || 0;
           const credit = entry.credit || 0;
           
-          // Check for matching credit note by suffix
-          const invSuffix = getInvoiceSuffix(entry.vchNo);
-          const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+          // Check for matching credit note by year+suffix
+          const invYearSuffix = getInvoiceYearSuffix(entry.vchNo);
+          const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
           // CN amounts may be negative, use Math.abs to get positive value for comparison
           const cnAmount = matchingCN ? Math.abs(matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
@@ -3943,13 +3963,13 @@ ${generateInvoiceHtml(row)}
           });
           
           // Add credit note entry RIGHT AFTER historical invoice if exists
-          if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
-            processedCNSuffixes.add(invSuffix);
+          if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+            processedCNKeys.add(invYearSuffix);
             runningBalance -= cnAmount;
             totalCredit += cnAmount;
             
             entries.push({
-              id: matchingCN.id || matchingCN.creditNoteNo || matchingCN.vchNo || `cn-${invSuffix}`,
+              id: matchingCN.id || matchingCN.creditNoteNo || matchingCN.vchNo || `cn-${invYearSuffix}`,
               date: matchingCN.date,
               particular: selectedParty,
               vchType: 'Credit Note',
