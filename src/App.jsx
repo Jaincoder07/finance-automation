@@ -4149,53 +4149,52 @@ ${generateInvoiceHtml(row)}
   // FOLLOWUPS TAB
   // ============================================
   
-  const renderFollowups = () => {
-    // Get all pending invoices (not received, no CN)
-    const pendingInvoices = useMemo(() => {
-      const invoiceMap = new Map();
-      masterData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved').forEach(row => {
-        if (!invoiceMap.has(row.invoiceNo)) {
-          const receipt = receipts.find(r => r.invoiceNo === row.invoiceNo);
-          const cn = creditNotes.find(c => c.invoiceNo === row.invoiceNo);
-          if (!receipt && !cn) {
-            invoiceMap.set(row.invoiceNo, {
-              invoiceNo: row.invoiceNo,
-              partyName: row.partyName,
-              invoiceDate: row.invoiceDate,
-              invoiceTotalAmount: row.invoiceTotalAmount,
-              subject: row.subject,
-              campaigns: [row]
-            });
-          }
-        } else {
+  // Compute followup data at component level (not inside render function)
+  const pendingInvoicesForFollowup = useMemo(() => {
+    const invoiceMap = new Map();
+    masterData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved').forEach(row => {
+      if (!invoiceMap.has(row.invoiceNo)) {
+        const receipt = receipts.find(r => r.invoiceNo === row.invoiceNo);
+        const cn = creditNotes.find(c => c.invoiceNo === row.invoiceNo);
+        if (!receipt && !cn) {
+          invoiceMap.set(row.invoiceNo, {
+            invoiceNo: row.invoiceNo,
+            partyName: row.partyName,
+            invoiceDate: row.invoiceDate,
+            invoiceTotalAmount: row.invoiceTotalAmount,
+            subject: row.subject,
+            campaigns: [row]
+          });
+        }
+      } else {
+        if (invoiceMap.has(row.invoiceNo)) {
           invoiceMap.get(row.invoiceNo).campaigns.push(row);
         }
-      });
-      return Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate));
-    }, [masterData, receipts, creditNotes]);
-    
-    // Group followups by invoice
-    const followupsByInvoice = useMemo(() => {
-      const grouped = {};
-      followups.forEach(f => {
-        if (!grouped[f.invoiceNo]) grouped[f.invoiceNo] = [];
-        grouped[f.invoiceNo].push(f);
-      });
-      // Sort each group by date (newest first)
-      Object.keys(grouped).forEach(key => {
-        grouped[key].sort((a, b) => new Date(b.followupDate) - new Date(a.followupDate));
-      });
-      return grouped;
-    }, [followups]);
-    
-    // Get upcoming followups
-    const upcomingFollowups = useMemo(() => {
-      const today = new Date().toISOString().split('T')[0];
-      return followups
-        .filter(f => f.nextFollowupDate && f.nextFollowupDate >= today)
-        .sort((a, b) => new Date(a.nextFollowupDate) - new Date(b.nextFollowupDate));
-    }, [followups]);
-    
+      }
+    });
+    return Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate));
+  }, [masterData, receipts, creditNotes]);
+  
+  const followupsByInvoice = useMemo(() => {
+    const grouped = {};
+    followups.forEach(f => {
+      if (!grouped[f.invoiceNo]) grouped[f.invoiceNo] = [];
+      grouped[f.invoiceNo].push(f);
+    });
+    Object.keys(grouped).forEach(key => {
+      grouped[key].sort((a, b) => new Date(b.followupDate) - new Date(a.followupDate));
+    });
+    return grouped;
+  }, [followups]);
+  
+  const upcomingFollowups = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return followups
+      .filter(f => f.nextFollowupDate && f.nextFollowupDate >= today)
+      .sort((a, b) => new Date(a.nextFollowupDate) - new Date(b.nextFollowupDate));
+  }, [followups]);
+  
+  const renderFollowups = () => {
     return (
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
@@ -4237,10 +4236,10 @@ ${generateInvoiceHtml(row)}
               </tr>
             </thead>
             <tbody>
-              {pendingInvoices.length === 0 ? (
+              {pendingInvoicesForFollowup.length === 0 ? (
                 <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>🎉 No pending invoices! All payments received.</td></tr>
               ) : (
-                pendingInvoices.map(inv => {
+                pendingInvoicesForFollowup.map(inv => {
                   const invFollowups = followupsByInvoice[inv.invoiceNo] || [];
                   const lastFollowup = invFollowups[0];
                   const daysPending = Math.floor((new Date() - new Date(inv.invoiceDate)) / (1000 * 60 * 60 * 24));
@@ -4268,7 +4267,7 @@ ${generateInvoiceHtml(row)}
                           {lastFollowup ? (
                             <div>
                               <div style={{ fontWeight: '600' }}>{formatDate(lastFollowup.followupDate)}</div>
-                              <div style={{ color: '#64748B', fontSize: '10px' }}>{lastFollowup.notes?.substring(0, 30)}...</div>
+                              <div style={{ color: '#64748B', fontSize: '10px' }}>{lastFollowup.notes?.substring(0, 30)}{lastFollowup.notes?.length > 30 ? '...' : ''}</div>
                             </div>
                           ) : (
                             <span style={{ color: '#DC2626', fontWeight: '600' }}>No followup yet</span>
