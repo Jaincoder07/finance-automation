@@ -87,6 +87,10 @@ export const saveAppState = async (userId, state) => {
       nextReceiptNo: state.nextReceiptNo || 1,
       nextCreditNoteNo: state.nextCreditNoteNo || 1,
       invoiceValues: state.invoiceValues || {},
+      notifications: state.notifications || [],
+      whatsappSettings: state.whatsappSettings || {},
+      partyMaster: state.partyMaster || [],
+      followups: state.followups || [],
       updatedAt: new Date().toISOString()
     });
     return true;
