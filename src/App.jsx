@@ -3117,8 +3117,24 @@ ${generateInvoiceHtml(row)}
               ) : (
                 sortedParties.map(party => {
                   const partyInvoices = invoicesByParty[party];
-                  const partyTotal = partyInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
                   const isExpanded = expandedParties.has(party);
+                  
+                  // Calculate total balance for the party
+                  let partyTotalBalance = 0;
+                  partyInvoices.forEach(inv => {
+                    const invoiceReceipt = receipts.find(r => r.invoiceNo === inv.invoiceNo);
+                    const invoiceCN = creditNotes.find(cn => cn.invoiceNo === inv.invoiceNo);
+                    const tdsEntry = ledgerEntries.find(e => e.invoiceNo === inv.invoiceNo && e.type === 'tds');
+                    const discountEntry = ledgerEntries.find(e => e.invoiceNo === inv.invoiceNo && e.type === 'discount');
+                    
+                    const invoiceAmount = inv.totalAmount || 0;
+                    const receivedAmount = invoiceReceipt ? (parseFloat(invoiceReceipt.amount) || 0) : 0;
+                    const tdsAmount = tdsEntry ? (parseFloat(tdsEntry.credit) || 0) : (invoiceReceipt ? (parseFloat(invoiceReceipt.tds) || 0) : 0);
+                    const cnAmount = invoiceCN ? Math.abs(parseFloat(invoiceCN.totalAmount) || 0) : 0;
+                    const discountAmount = discountEntry ? (parseFloat(discountEntry.credit) || 0) : 0;
+                    const balanceAmount = Math.max(0, invoiceAmount - receivedAmount - tdsAmount - cnAmount - discountAmount);
+                    partyTotalBalance += balanceAmount;
+                  });
                   
                   return (
                     <React.Fragment key={party}>
@@ -3137,8 +3153,11 @@ ${generateInvoiceHtml(row)}
                             </span>
                           </div>
                         </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', fontSize: '13px' }}>{formatCurrency(partyTotal)}</td>
-                        <td colSpan="8" style={{ padding: '10px 12px' }}></td>
+                        <td colSpan="4" style={{ padding: '10px 12px' }}></td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', fontSize: '13px', backgroundColor: partyTotalBalance === 0 ? '#22C55E' : '#3B82F6' }}>
+                          {partyTotalBalance === 0 ? '✅ Nil' : `Bal: ${formatCurrency(partyTotalBalance)}`}
+                        </td>
+                        <td colSpan="4" style={{ padding: '10px 12px' }}></td>
                       </tr>
                       
                       {/* Invoice Rows */}
@@ -4623,7 +4642,8 @@ ${generateInvoiceHtml(row)}
             cnAmount: cnAmount,
             subject: row.subject,
             campaigns: [row],
-            isHistorical: false
+            isHistorical: false,
+            invoiceType: row.invoiceType || 'Individual'
           });
         }
       } else {
@@ -4832,6 +4852,7 @@ ${generateInvoiceHtml(row)}
                 <thead>
                   <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
                     <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '700' }}>Invoice No</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Type</th>
                     <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Invoice Date</th>
                     <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>Amount</th>
                     <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Days Pending</th>
@@ -4844,6 +4865,7 @@ ${generateInvoiceHtml(row)}
                     const invFollowups = followupsByInvoice[inv.invoiceNo] || [];
                     const lastFollowup = invFollowups[0];
                     const daysPending = Math.floor((new Date() - new Date(inv.invoiceDate)) / (1000 * 60 * 60 * 24));
+                    const invoiceType = inv.isHistorical ? 'Historical' : (inv.invoiceType || (inv.campaigns?.length > 1 ? 'Combined' : 'Individual'));
                     
                     return (
                       <React.Fragment key={inv.invoiceNo}>
@@ -4863,6 +4885,18 @@ ${generateInvoiceHtml(row)}
                                 Partial CN
                               </span>
                             )}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                            <span style={{ 
+                              padding: '3px 8px', 
+                              borderRadius: '6px', 
+                              fontSize: '10px', 
+                              fontWeight: '600',
+                              backgroundColor: invoiceType === 'Historical' ? '#E0E7FF' : invoiceType === 'Combined' ? '#F3E8FF' : '#DCFCE7',
+                              color: invoiceType === 'Historical' ? '#3730A3' : invoiceType === 'Combined' ? '#7C3AED' : '#166534'
+                            }}>
+                              {invoiceType}
+                            </span>
                           </td>
                           <td style={{ padding: '10px 12px', textAlign: 'center' }}>{formatDate(inv.invoiceDate)}</td>
                           <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600' }}>
@@ -4908,7 +4942,7 @@ ${generateInvoiceHtml(row)}
                         {/* Followup history for this invoice */}
                         {invFollowups.length > 0 && (
                           <tr>
-                            <td colSpan="6" style={{ padding: '8px 12px 12px 40px', backgroundColor: '#F8FAFC' }}>
+                            <td colSpan="7" style={{ padding: '8px 12px 12px 40px', backgroundColor: '#F8FAFC' }}>
                               <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B', marginBottom: '6px' }}>Followup History:</div>
                               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                 {invFollowups.map(f => (
