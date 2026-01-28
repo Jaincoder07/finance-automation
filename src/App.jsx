@@ -1148,16 +1148,23 @@ export default function FinanceApp() {
     }
     
     // Update invoice receipt status
+    // Check if balance becomes 0 after this receipt
+    const invoiceAmount = parseFloat(selectedRow.invoiceTotalAmount) || 0;
+    const existingCN = creditNotes.find(cn => cn.invoiceNo === selectedRow.invoiceNo);
+    const existingCNAmount = existingCN ? Math.abs(parseFloat(existingCN.totalAmount) || 0) : 0;
+    const balanceAfterReceipt = invoiceAmount - totalCredit - existingCNAmount;
+    const shouldClose = balanceAfterReceipt <= 0;
+    
     if (selectedRow.invoiceType === 'Combined' && selectedRow.combinationCode !== 'NA') {
       setMasterData(prev => prev.map(r => 
         r.combinationCode === selectedRow.combinationCode 
-          ? { ...r, receiptStatus: 'Received', receiptNo, receiptDate: receiptForm.date } 
+          ? { ...r, receiptStatus: shouldClose ? 'Closed' : 'Received', receiptNo, receiptDate: receiptForm.date } 
           : r
       ));
-    } else {
+    } else if (!selectedRow.isHistorical) {
       setMasterData(prev => prev.map(r => 
         r.id === selectedRow.id 
-          ? { ...r, receiptStatus: 'Received', receiptNo, receiptDate: receiptForm.date } 
+          ? { ...r, receiptStatus: shouldClose ? 'Closed' : 'Received', receiptNo, receiptDate: receiptForm.date } 
           : r
       ));
     }
@@ -1229,12 +1236,24 @@ export default function FinanceApp() {
     
     setCreditNotes(prev => [...prev, newCreditNote]);
     
-    // Update masterData to add credit note number
-    setMasterData(prev => prev.map(row => 
-      row.invoiceNo === selectedRow.invoiceNo 
-        ? { ...row, creditNoteNo: creditNoteNo }
-        : row
-    ));
+    // Check if CN covers full invoice amount - mark as Cancelled
+    const invoiceAmount = parseFloat(selectedRow.invoiceTotalAmount) || 0;
+    const existingReceipt = receipts.find(r => r.invoiceNo === selectedRow.invoiceNo);
+    const existingReceiptAmount = existingReceipt ? (parseFloat(existingReceipt.amount) + parseFloat(existingReceipt.tds || 0) + parseFloat(existingReceipt.discount || 0)) : 0;
+    const isFullyCoveredByCN = totalCredit >= (invoiceAmount - existingReceiptAmount);
+    
+    // Update masterData to add credit note number and status if fully covered
+    if (!selectedRow.isHistorical) {
+      setMasterData(prev => prev.map(row => 
+        row.invoiceNo === selectedRow.invoiceNo 
+          ? { 
+              ...row, 
+              creditNoteNo: creditNoteNo,
+              receiptStatus: isFullyCoveredByCN ? 'Cancelled' : row.receiptStatus
+            }
+          : row
+      ));
+    }
     
     setNextCreditNoteNo(prev => prev + 1);
     setShowCreditNoteModal(false);
@@ -1248,6 +1267,7 @@ export default function FinanceApp() {
     if (creditAmount > 0) alertMsg += `\nBase Amount: ${formatCurrency(creditAmount)}`;
     if (gstAmount > 0) alertMsg += `\n${gstType}: ${formatCurrency(gstAmount)}`;
     alertMsg += `\nTotal: ${formatCurrency(totalCredit)}`;
+    if (isFullyCoveredByCN) alertMsg += `\n\n⚠️ Invoice fully covered by CN - marked as Cancelled`;
     alert(alertMsg);
   };
 
@@ -2524,18 +2544,18 @@ ${generateInvoiceHtml(row)}
   
   const renderMasterSheet = () => {
     // Separate open and closed invoices
-    // Closed = billed (toBeBilled=Yes) + invoiced + mailed (mailingSent=Yes) + receipt received (receiptStatus=Received)
+    // Closed = billed (toBeBilled=Yes) + invoiced + mailed (mailingSent=Yes) + (receipt received OR cancelled by CN OR balance = 0)
     const closedInvoices = masterData.filter(r => 
       r.toBeBilled === 'Yes' && 
       r.invoiceGenerated && 
       r.mailingSent === 'Yes' && 
-      r.receiptStatus === 'Received'
+      (r.receiptStatus === 'Received' || r.receiptStatus === 'Cancelled' || r.receiptStatus === 'Closed')
     );
     const openInvoices = masterData.filter(r => 
       !(r.toBeBilled === 'Yes' && 
         r.invoiceGenerated && 
         r.mailingSent === 'Yes' && 
-        r.receiptStatus === 'Received')
+        (r.receiptStatus === 'Received' || r.receiptStatus === 'Cancelled' || r.receiptStatus === 'Closed'))
     );
     
     // Apply filters to the current tab's data
@@ -2776,10 +2796,12 @@ ${generateInvoiceHtml(row)}
                                   {row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
                                     <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
                                       <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
-                                      <ActionButton icon={Mail} small variant="brand" onClick={() => {
-                                        setSelectedRow(row);
-                                        setShowEmailModal(true);
-                                      }} title="Send Email" />
+                                      {canEdit && (
+                                        <ActionButton icon={Mail} small variant="brand" onClick={() => {
+                                          setSelectedRow(row);
+                                          setShowEmailModal(true);
+                                        }} title="Send Email" />
+                                      )}
                                       {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
                                   ) : row.invoiceGenerated ? (
@@ -2821,8 +2843,10 @@ ${generateInvoiceHtml(row)}
                                 
                                 {/* Receipt Status Column */}
                                 <td style={{ padding: '10px 14px', textAlign: 'center', backgroundColor: '#FAF5FF' }}>
-                                  {row.receiptStatus === 'Received' ? (
+                                  {row.receiptStatus === 'Received' || row.receiptStatus === 'Closed' ? (
                                     <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '700', backgroundColor: '#DCFCE7', color: '#166534' }}>✅ {row.receiptNo || 'Received'}</span>
+                                  ) : row.receiptStatus === 'Cancelled' ? (
+                                    <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '700', backgroundColor: '#FEE2E2', color: '#991B1B' }}>❌ Cancelled</span>
                                   ) : row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
                                     <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '600', backgroundColor: '#FEF3C7', color: '#92400E' }}>⏳ Pending</span>
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
@@ -2847,7 +2871,7 @@ ${generateInvoiceHtml(row)}
               <span>✅ To Bill: <strong>{filteredTabData.filter(r => r.toBeBilled === 'Yes').length}</strong></span>
               <span>🧾 Invoiced: <strong>{filteredTabData.filter(r => r.invoiceGenerated).length}</strong></span>
               <span>✅ Approved: <strong>{filteredTabData.filter(r => r.invoiceStatus === 'Approved').length}</strong></span>
-              {masterSheetTab === 'closed' && <span>💰 Received: <strong>{filteredTabData.filter(r => r.receiptStatus === 'Received').length}</strong></span>}
+              {masterSheetTab === 'closed' && <span>💰 Closed: <strong>{filteredTabData.filter(r => r.receiptStatus === 'Received' || r.receiptStatus === 'Cancelled' || r.receiptStatus === 'Closed').length}</strong></span>}
             </div>
             <div style={{ fontSize: '18px', fontWeight: '700', color: '#059669' }}>
               Total: {formatCurrency(filteredTabData.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || 0), 0))}
@@ -3077,6 +3101,10 @@ ${generateInvoiceHtml(row)}
                 <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '700' }}>Date</th>
                 <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Type</th>
                 <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>Amount</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', backgroundColor: '#F0FDF4', color: '#166534' }}>Received</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', backgroundColor: '#FEF3C7', color: '#92400E' }}>TDS</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', backgroundColor: '#FEE2E2', color: '#991B1B' }}>CN Amt</th>
+                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', backgroundColor: '#EFF6FF', color: '#1E40AF' }}>Balance</th>
                 <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Inv. Status</th>
                 <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Receipt No.</th>
                 <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>CN No.</th>
@@ -3085,7 +3113,7 @@ ${generateInvoiceHtml(row)}
             </thead>
             <tbody>
               {sortedParties.length === 0 ? (
-                <tr><td colSpan="8" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>{hasInvoiceFilters ? 'No matching invoices' : 'No invoices generated yet'}</td></tr>
+                <tr><td colSpan="12" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>{hasInvoiceFilters ? 'No matching invoices' : 'No invoices generated yet'}</td></tr>
               ) : (
                 sortedParties.map(party => {
                   const partyInvoices = invoicesByParty[party];
@@ -3110,7 +3138,7 @@ ${generateInvoiceHtml(row)}
                           </div>
                         </td>
                         <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', fontSize: '13px' }}>{formatCurrency(partyTotal)}</td>
-                        <td colSpan="4" style={{ padding: '10px 12px' }}></td>
+                        <td colSpan="8" style={{ padding: '10px 12px' }}></td>
                       </tr>
                       
                       {/* Invoice Rows */}
@@ -3119,16 +3147,37 @@ ${generateInvoiceHtml(row)}
                         const invoiceReceipt = receipts.find(r => r.invoiceNo === inv.invoiceNo);
                         // Find credit note for this invoice
                         const invoiceCN = creditNotes.find(cn => cn.invoiceNo === inv.invoiceNo);
+                        // Find TDS ledger entry for this invoice
+                        const tdsEntry = ledgerEntries.find(e => e.invoiceNo === inv.invoiceNo && e.type === 'tds');
+                        // Find discount ledger entry for this invoice
+                        const discountEntry = ledgerEntries.find(e => e.invoiceNo === inv.invoiceNo && e.type === 'discount');
+                        
+                        // Calculate amounts
+                        const invoiceAmount = inv.totalAmount || 0;
+                        const receivedAmount = invoiceReceipt ? (parseFloat(invoiceReceipt.amount) || 0) : 0;
+                        const tdsAmount = tdsEntry ? (parseFloat(tdsEntry.credit) || 0) : (invoiceReceipt ? (parseFloat(invoiceReceipt.tds) || 0) : 0);
+                        const cnAmount = invoiceCN ? Math.abs(parseFloat(invoiceCN.totalAmount) || 0) : 0;
+                        const discountAmount = discountEntry ? (parseFloat(discountEntry.credit) || 0) : 0;
+                        const balanceAmount = Math.max(0, invoiceAmount - receivedAmount - tdsAmount - cnAmount - discountAmount);
+                        
+                        // Check if fully covered by CN (CN Cancelled scenario)
+                        const isFullyCoveredByCN = cnAmount >= invoiceAmount && !invoiceReceipt;
                         
                         return (
-                        <tr key={inv.invoiceNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: inv.invoiceType === 'Combined' ? '#FAF5FF' : 'transparent' }}>
+                        <tr key={inv.invoiceNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: inv.invoiceType === 'Combined' ? '#FAF5FF' : (balanceAmount === 0 ? '#F0FDF4' : 'transparent') }}>
                           <td style={{ padding: '10px 12px 10px 36px', fontWeight: '700', color: inv.invoiceType === 'Combined' ? '#7C3AED' : '#2874A6' }}>{inv.invoiceNo}</td>
                           <td style={{ padding: '10px 12px' }}>{formatDate(inv.date)}</td>
                           <td style={{ padding: '10px 12px', textAlign: 'center' }}><StatusBadge status={inv.invoiceType} small /></td>
-                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>{formatCurrency(inv.totalAmount)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>{formatCurrency(invoiceAmount)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600', backgroundColor: '#F0FDF4', color: receivedAmount > 0 ? '#166534' : '#94A3B8' }}>{receivedAmount > 0 ? formatCurrency(receivedAmount) : '-'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600', backgroundColor: '#FEF3C7', color: tdsAmount > 0 ? '#92400E' : '#94A3B8' }}>{tdsAmount > 0 ? formatCurrency(tdsAmount) : '-'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600', backgroundColor: '#FEE2E2', color: cnAmount > 0 ? '#991B1B' : '#94A3B8' }}>{cnAmount > 0 ? formatCurrency(cnAmount) : '-'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700', backgroundColor: '#EFF6FF', color: balanceAmount > 0 ? '#1E40AF' : '#166534' }}>{balanceAmount === 0 ? '✅ Nil' : formatCurrency(balanceAmount)}</td>
                           <td style={{ padding: '10px 12px', textAlign: 'center' }}><StatusBadge status={inv.invoiceStatus} small /></td>
                           <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                            {invoiceReceipt ? (
+                            {isFullyCoveredByCN ? (
+                              <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '700', backgroundColor: '#FEE2E2', color: '#991B1B' }}>❌ Cancelled</span>
+                            ) : invoiceReceipt ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'center' }}>
                                 <button 
                                   onClick={() => viewReceipt(invoiceReceipt)}
@@ -4518,8 +4567,39 @@ ${generateInvoiceHtml(row)}
   // ============================================
   
   // Compute followup data at component level (not inside render function)
+  // State for followup search filter
+  const [followupSearchText, setFollowupSearchText] = useState('');
+  
   const pendingInvoicesForFollowup = useMemo(() => {
     const invoiceMap = new Map();
+    
+    // Helper to extract year+suffix for CN matching
+    const getInvoiceYearSuffix = (vchNo) => {
+      if (!vchNo) return '';
+      const parts = vchNo.split('/');
+      if (parts.length >= 3) {
+        return parts.slice(1).join('/');
+      } else if (parts.length === 2) {
+        return parts.join('/');
+      }
+      return parts[parts.length - 1];
+    };
+    
+    // Build CN map for historical matching
+    const historicalCNs = ledgerEntries.filter(e => 
+      e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+    );
+    const cnMapForFollowup = new Map();
+    creditNotes.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.invoiceNo);
+      if (key) cnMapForFollowup.set(key, cn);
+    });
+    historicalCNs.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.vchNo);
+      if (key && !cnMapForFollowup.has(key)) cnMapForFollowup.set(key, cn);
+    });
+    
+    // Add system invoices
     masterData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved').forEach(row => {
       if (!invoiceMap.has(row.invoiceNo)) {
         const receipt = receipts.find(r => r.invoiceNo === row.invoiceNo);
@@ -4542,7 +4622,8 @@ ${generateInvoiceHtml(row)}
             hasPartialCN: !!cn && !isFullyCoveredByCN && cnAmount > 0,
             cnAmount: cnAmount,
             subject: row.subject,
-            campaigns: [row]
+            campaigns: [row],
+            isHistorical: false
           });
         }
       } else {
@@ -4551,9 +4632,51 @@ ${generateInvoiceHtml(row)}
         }
       }
     });
+    
+    // Add historical pending invoices
+    ledgerEntries.filter(e => 
+      e.isHistorical && 
+      e.type !== 'creditnote' && 
+      !e.vchNo?.toUpperCase().startsWith('CN') &&
+      e.debit > 0
+    ).forEach(entry => {
+      if (!invoiceMap.has(entry.vchNo)) {
+        const existingReceipt = receipts.find(r => r.invoiceNo === entry.vchNo);
+        
+        // Check CN matching
+        const invYearSuffix = getInvoiceYearSuffix(entry.vchNo);
+        const matchingCN = cnMapForFollowup.get(invYearSuffix);
+        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
+        const debit = parseFloat(entry.debit) || 0;
+        const isFullyCoveredByCN = matchingCN && cnAmount >= debit;
+        
+        // Skip if receipt exists or fully covered by CN
+        if (existingReceipt || isFullyCoveredByCN) return;
+        
+        const isPending = !(entry.amountReceived > 0);
+        const hasPartialCN = matchingCN && cnAmount > 0 && cnAmount < debit;
+        
+        if (isPending || hasPartialCN) {
+          const pendingAmount = hasPartialCN ? debit - cnAmount : debit;
+          invoiceMap.set(entry.vchNo, {
+            invoiceNo: entry.vchNo,
+            partyName: entry.partyName,
+            invoiceDate: entry.date,
+            invoiceTotalAmount: debit,
+            pendingAmount: pendingAmount,
+            hasPartialCN: hasPartialCN,
+            cnAmount: cnAmount,
+            subject: entry.particulars || entry.narration,
+            campaigns: [],
+            isHistorical: true
+          });
+        }
+      }
+    });
+    
     // Sort by party name (alphabetically)
     return Array.from(invoiceMap.values()).sort((a, b) => a.partyName.localeCompare(b.partyName));
-  }, [masterData, receipts, creditNotes]);
+  }, [masterData, receipts, creditNotes, ledgerEntries]);
   
   const followupsByInvoice = useMemo(() => {
     const grouped = {};
@@ -4574,10 +4697,21 @@ ${generateInvoiceHtml(row)}
       .sort((a, b) => new Date(a.nextFollowupDate) - new Date(b.nextFollowupDate));
   }, [followups]);
   
-  // Group pending invoices by party for display
+  // Group pending invoices by party for display (with search filter)
   const pendingInvoicesGroupedByParty = useMemo(() => {
+    // Apply search filter first
+    let filteredInvoices = pendingInvoicesForFollowup;
+    if (followupSearchText) {
+      const search = followupSearchText.toLowerCase();
+      filteredInvoices = pendingInvoicesForFollowup.filter(inv => 
+        inv.invoiceNo?.toLowerCase().includes(search) ||
+        inv.partyName?.toLowerCase().includes(search) ||
+        inv.subject?.toLowerCase().includes(search)
+      );
+    }
+    
     const grouped = {};
-    pendingInvoicesForFollowup.forEach(inv => {
+    filteredInvoices.forEach(inv => {
       if (!grouped[inv.partyName]) {
         grouped[inv.partyName] = {
           partyName: inv.partyName,
@@ -4591,18 +4725,51 @@ ${generateInvoiceHtml(row)}
     });
     // Sort parties alphabetically
     return Object.values(grouped).sort((a, b) => a.partyName.localeCompare(b.partyName));
-  }, [pendingInvoicesForFollowup]);
+  }, [pendingInvoicesForFollowup, followupSearchText]);
   
   const renderFollowups = () => {
+    const filteredCount = pendingInvoicesGroupedByParty.reduce((sum, g) => sum + g.invoices.length, 0);
+    
     return (
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>📞 Followups</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <span style={{ padding: '6px 12px', backgroundColor: '#EFF6FF', borderRadius: '6px', fontSize: '12px', color: '#1E40AF', fontWeight: '600' }}>
-              {pendingInvoicesGroupedByParty.length} Parties | {pendingInvoicesForFollowup.length} Invoices
+              {pendingInvoicesGroupedByParty.length} Parties | {filteredCount} Invoices
             </span>
             {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
+          </div>
+        </div>
+        
+        {/* Search Filter */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '14px 18px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Filter size={18} color="#64748B" />
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Search:</span>
+            </div>
+            <div style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+              <input 
+                type="text" 
+                placeholder="Search party, invoice, subject..." 
+                value={followupSearchText} 
+                onChange={(e) => setFollowupSearchText(e.target.value)}
+                style={{ padding: '8px 12px 8px 32px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', width: '100%' }}
+              />
+            </div>
+            {followupSearchText && (
+              <button onClick={() => setFollowupSearchText('')} 
+                style={{ padding: '8px 12px', fontSize: '13px', fontWeight: '600', border: '1.5px solid #FCA5A5', borderRadius: '8px', backgroundColor: '#FEE2E2', color: '#991B1B', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <X size={14} /> Clear
+              </button>
+            )}
+            {followupSearchText && (
+              <span style={{ fontSize: '13px', color: '#64748B' }}>
+                Showing {filteredCount} of {pendingInvoicesForFollowup.length}
+              </span>
+            )}
           </div>
         </div>
         
