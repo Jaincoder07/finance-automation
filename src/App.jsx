@@ -510,12 +510,21 @@ export default function FinanceApp() {
     try {
       const data = await loadAppState('indreesh-media');
       if (data) {
-        if (data.masterData) setMasterData(data.masterData);
-        if (data.ledgerEntries) setLedgerEntries(data.ledgerEntries);
-        if (data.receipts) setReceipts(data.receipts);
-        if (data.creditNotes) setCreditNotes(data.creditNotes);
-        if (data.openingBalances) setOpeningBalances(data.openingBalances);
-        if (data.mailerImages) setMailerImages(data.mailerImages);
+        // Arrays - ensure they're actually arrays
+        if (Array.isArray(data.masterData)) setMasterData(data.masterData);
+        if (Array.isArray(data.ledgerEntries)) setLedgerEntries(data.ledgerEntries);
+        if (Array.isArray(data.receipts)) setReceipts(data.receipts);
+        if (Array.isArray(data.creditNotes)) setCreditNotes(data.creditNotes);
+        if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+        
+        // Objects - ensure they're actually objects
+        if (data.openingBalances && typeof data.openingBalances === 'object' && !Array.isArray(data.openingBalances)) setOpeningBalances(data.openingBalances);
+        if (data.mailerImages && typeof data.mailerImages === 'object' && !Array.isArray(data.mailerImages)) setMailerImages(data.mailerImages);
+        if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) setPartyMaster(data.partyMaster);
+        if (data.followups && typeof data.followups === 'object' && !Array.isArray(data.followups)) setFollowups(data.followups);
+        if (data.userPasswords && typeof data.userPasswords === 'object' && !Array.isArray(data.userPasswords)) setUserPasswords(data.userPasswords);
+        
+        // Other types
         if (data.mailerLogo) setMailerLogo(data.mailerLogo);
         if (data.companyConfig) setCompanyConfig(prev => ({ ...prev, ...data.companyConfig }));
         if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
@@ -523,11 +532,7 @@ export default function FinanceApp() {
         if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
         if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
         if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
-        if (data.notifications) setNotifications(data.notifications);
         if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
-        if (data.partyMaster) setPartyMaster(data.partyMaster);
-        if (data.followups) setFollowups(data.followups);
-        if (data.userPasswords) setUserPasswords(data.userPasswords);
         console.log('Data loaded from Firebase');
       }
     } catch (error) {
@@ -674,18 +679,24 @@ export default function FinanceApp() {
   };
 
   const markNotificationAsRead = (notificationId) => {
-    setNotifications(prev => prev.map(n => {
-      if (n.id === notificationId) {
-        return { ...n, read: { ...n.read, [userRole]: true } };
-      }
-      return n;
-    }));
+    setNotifications(prev => {
+      if (!Array.isArray(prev)) return [];
+      return prev.map(n => {
+        if (n.id === notificationId) {
+          return { ...n, read: { ...n.read, [userRole]: true } };
+        }
+        return n;
+      });
+    });
   };
 
   const markAllNotificationsAsRead = () => {
-    setNotifications(prev => prev.map(n => ({
-      ...n, read: { ...n.read, [userRole]: true }
-    })));
+    setNotifications(prev => {
+      if (!Array.isArray(prev)) return [];
+      return prev.map(n => ({
+        ...n, read: { ...n.read, [userRole]: true }
+      }));
+    });
   };
 
   const clearAllNotifications = () => {
@@ -694,6 +705,7 @@ export default function FinanceApp() {
 
   // Get notifications for current user role
   const userNotifications = useMemo(() => {
+    if (!Array.isArray(notifications)) return [];
     return notifications.filter(n => 
       n.forRole === 'all' || n.forRole === userRole || n.createdBy !== userRole
     ).map(n => ({
@@ -704,6 +716,7 @@ export default function FinanceApp() {
 
   const unreadCount = useMemo(() => {
     if (!userRole) return 0;
+    if (!Array.isArray(userNotifications)) return 0;
     return userNotifications.filter(n => !(n.read && n.read[userRole])).length;
   }, [userNotifications, userRole]);
 
@@ -826,13 +839,21 @@ export default function FinanceApp() {
       // Mark that we're receiving an update to avoid save loop
       isReceivingUpdateRef.current = true;
       
-      // Only update if data is different (compare timestamps or use deep comparison)
-      if (data.masterData) setMasterData(data.masterData);
-      if (data.ledgerEntries) setLedgerEntries(data.ledgerEntries);
-      if (data.receipts) setReceipts(data.receipts);
-      if (data.creditNotes) setCreditNotes(data.creditNotes);
-      if (data.openingBalances) setOpeningBalances(data.openingBalances);
-      if (data.mailerImages) setMailerImages(data.mailerImages);
+      // Arrays - ensure they're actually arrays
+      if (Array.isArray(data.masterData)) setMasterData(data.masterData);
+      if (Array.isArray(data.ledgerEntries)) setLedgerEntries(data.ledgerEntries);
+      if (Array.isArray(data.receipts)) setReceipts(data.receipts);
+      if (Array.isArray(data.creditNotes)) setCreditNotes(data.creditNotes);
+      if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+      
+      // Objects - ensure they're actually objects
+      if (data.openingBalances && typeof data.openingBalances === 'object' && !Array.isArray(data.openingBalances)) setOpeningBalances(data.openingBalances);
+      if (data.mailerImages && typeof data.mailerImages === 'object' && !Array.isArray(data.mailerImages)) setMailerImages(data.mailerImages);
+      if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) setPartyMaster(data.partyMaster);
+      if (data.followups && typeof data.followups === 'object' && !Array.isArray(data.followups)) setFollowups(data.followups);
+      if (data.userPasswords && typeof data.userPasswords === 'object' && !Array.isArray(data.userPasswords)) setUserPasswords(data.userPasswords);
+      
+      // Other types
       if (data.mailerLogo) setMailerLogo(data.mailerLogo);
       if (data.companyConfig) setCompanyConfig(prev => ({ ...prev, ...data.companyConfig }));
       if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
@@ -840,11 +861,7 @@ export default function FinanceApp() {
       if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
       if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
       if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
-      if (data.notifications) setNotifications(data.notifications);
       if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
-      if (data.partyMaster) setPartyMaster(data.partyMaster);
-      if (data.followups) setFollowups(data.followups);
-      if (data.userPasswords) setUserPasswords(data.userPasswords);
       
       // Reset flag after a short delay
       setTimeout(() => {
@@ -870,10 +887,11 @@ export default function FinanceApp() {
   
   const parties = useMemo(() => {
     // Combine parties from: masterData, partyMaster, ledgerEntries, openingBalances
-    const masterParties = masterData.map(r => r.partyName);
-    const partyMasterParties = Object.keys(partyMaster);
-    const ledgerParties = ledgerEntries.map(e => e.partyName);
-    const openingBalanceParties = Object.keys(openingBalances);
+    // Add defensive checks to ensure arrays/objects are valid
+    const masterParties = Array.isArray(masterData) ? masterData.map(r => r.partyName) : [];
+    const partyMasterParties = (partyMaster && typeof partyMaster === 'object') ? Object.keys(partyMaster) : [];
+    const ledgerParties = Array.isArray(ledgerEntries) ? ledgerEntries.map(e => e.partyName) : [];
+    const openingBalanceParties = (openingBalances && typeof openingBalances === 'object') ? Object.keys(openingBalances) : [];
     
     const allParties = [...masterParties, ...partyMasterParties, ...ledgerParties, ...openingBalanceParties];
     const uniqueParties = [...new Set(allParties)];
@@ -881,11 +899,13 @@ export default function FinanceApp() {
   }, [masterData, partyMaster, ledgerEntries, openingBalances]);
 
   const combinationCodes = useMemo(() => {
+    if (!Array.isArray(masterData)) return [];
     const codes = [...new Set(masterData.filter(r => r.combinationCode && r.combinationCode !== 'NA').map(r => r.combinationCode))];
     return codes.sort((a, b) => parseInt(a) - parseInt(b));
   }, [masterData]);
 
   const filteredData = useMemo(() => {
+    if (!Array.isArray(masterData)) return [];
     return masterData.filter(row => {
       if (filters.party && row.partyName !== filters.party) return false;
       if (filters.billStatus && row.toBeBilled !== filters.billStatus) return false;
@@ -914,6 +934,7 @@ export default function FinanceApp() {
 
   const groupedData = useMemo(() => {
     const groups = {};
+    if (!Array.isArray(filteredData)) return groups;
     filteredData.forEach(row => {
       if (!groups[row.partyName]) groups[row.partyName] = [];
       groups[row.partyName].push(row);
@@ -930,9 +951,11 @@ export default function FinanceApp() {
 
   const partyLedger = useMemo(() => {
     if (!selectedParty) return [];
-    const openingBal = openingBalances[selectedParty] || 0;
+    const safeOpeningBalances = (openingBalances && typeof openingBalances === 'object') ? openingBalances : {};
+    const safeLedgerEntries = Array.isArray(ledgerEntries) ? ledgerEntries : [];
+    const openingBal = safeOpeningBalances[selectedParty] || 0;
     let balance = openingBal;
-    const entries = ledgerEntries
+    const entries = safeLedgerEntries
       .filter(e => e.partyName === selectedParty)
       .sort((a, b) => new Date(a.date) - new Date(b.date))
       .map(entry => {
@@ -949,6 +972,7 @@ export default function FinanceApp() {
   }, [selectedParty, ledgerEntries, openingBalances]);
 
   const getUnbilledCampaignsForParty = (partyName) => {
+    if (!Array.isArray(masterData)) return [];
     return masterData.filter(r => 
       r.partyName === partyName && 
       r.toBeBilled === 'Yes' && 
@@ -959,11 +983,13 @@ export default function FinanceApp() {
 
   const isCombinedMailSent = (combinationCode) => {
     if (!combinationCode || combinationCode === 'NA') return false;
+    if (!Array.isArray(masterData)) return false;
     return masterData.some(r => r.combinationCode === combinationCode && r.mailingSent === 'Yes');
   };
 
   // Get all campaigns for a combined invoice
   const getCombinedCampaigns = (row) => {
+    if (!Array.isArray(masterData)) return [row];
     if (row.invoiceType === 'Combined' && row.combinationCode !== 'NA') {
       return masterData.filter(r => r.combinationCode === row.combinationCode);
     }
@@ -2000,7 +2026,8 @@ Phone: ${companyConfig.phone}`;
     setSelectedParty(null);
     setExpandedParties(new Set());
     setFollowups({});
-    setPartyMaster([]);
+    setPartyMaster({});
+    setNotifications([]);
     
     // Directly save cleared data to Firebase (don't rely on state which is async)
     try {
@@ -2020,7 +2047,7 @@ Phone: ${companyConfig.phone}`;
         invoiceValues,
         notifications: [],
         whatsappSettings,
-        partyMaster: [],
+        partyMaster: {},
         followups: {},
         userPasswords
       });
@@ -3794,8 +3821,9 @@ ${generateInvoiceHtml(row)}
     }, 0);
     
     // Get party address
-    const partyRow = masterData.find(r => r.partyName === selectedParty) || partyMaster.find(p => p.partyName === selectedParty);
-    const partyAddress = partyRow?.statePartyDetails || partyRow?.address || '';
+    const partyRow = masterData.find(r => r.partyName === selectedParty);
+    const partyMasterRow = partyMaster[selectedParty];
+    const partyAddress = partyRow?.statePartyDetails || partyRow?.address || partyMasterRow?.stateName || '';
     
     const html = `
 <!DOCTYPE html>
