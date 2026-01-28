@@ -327,7 +327,7 @@ export default function FinanceApp() {
   };
 
   const [companyConfig, setCompanyConfig] = useState({
-    name: 'JAC Finance Automation',
+    name: 'Finance Automation',
     brand: 'JAC',
     address: 'A-1701 Sweet Home CHS LTD, SVP, Plot No: 24',
     addressLine2: 'Andheri West, Nr Last Bus St',
@@ -344,7 +344,7 @@ export default function FinanceApp() {
       account: '921020009075531',
       branch: 'Andheri',
       ifsc: 'UTIB0000020',
-      holder: 'JAC Finance Automation'
+      holder: 'Finance Automation'
     },
     invoicePrefix: 'MB/2025-26/',
     hsnCode: '998365',
@@ -625,7 +625,7 @@ export default function FinanceApp() {
       alert('Please enter phone number and API key first');
       return;
     }
-    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from JAC Finance Automation. WhatsApp notifications are working!');
+    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from Finance Automation. WhatsApp notifications are working!');
     alert('Test message sent! Check your WhatsApp.');
   };
   
@@ -926,7 +926,8 @@ export default function FinanceApp() {
   
   const openApprovalModal = (row) => {
     setSelectedRow(row);
-    setEditComments(row.editComments || '');
+    // Load existing remarks (either editComments or approvalRemarks)
+    setEditComments(row.editComments || row.approvalRemarks || '');
     setApprovalChecks({
       particularsApproved: row.particularsApproved || false,
       emailApproved: row.emailApproved || false,
@@ -946,7 +947,8 @@ export default function FinanceApp() {
     
     const approvalData = {
       invoiceStatus: 'Approved',
-      editComments: '',
+      approvalRemarks: editComments.trim() || '', // Save approval remarks
+      editComments: '', // Clear edit comments
       particularsApproved: true,
       emailApproved: true,
       invoiceTypeApproved: true,
@@ -991,7 +993,8 @@ export default function FinanceApp() {
     }]);
     
     // Notify finance about approval
-    addNotification('approval', `✅ Invoice ${selectedRow.invoiceNo} has been APPROVED by Director - ready for mailing`, 'finance');
+    const remarksNote = editComments.trim() ? ` | Remarks: "${editComments.trim()}"` : '';
+    addNotification('approval', `✅ Invoice ${selectedRow.invoiceNo} has been APPROVED by Director${remarksNote} - ready for mailing`, 'finance');
     
     // Data will auto-save in 1 second
     // Auto-save will handle this
@@ -999,31 +1002,32 @@ export default function FinanceApp() {
     setShowApprovalModal(false);
     setSelectedRow(null);
     setApprovalChecks({ particularsApproved: false, emailApproved: false, invoiceTypeApproved: false });
+    setEditComments('');
     alert('✅ Invoice Approved!\n\nThe invoice is now ready for mailing.');
   };
 
   const handleNeedEdits = () => {
-    if (!selectedRow || !editComments.trim()) {
-      alert('Please add comments for the required edits');
-      return;
-    }
+    if (!selectedRow) return;
+    
+    const remarksToSave = editComments.trim();
     
     if (selectedRow.invoiceType === 'Combined' && selectedRow.combinationCode !== 'NA') {
       setMasterData(prev => prev.map(r => 
         r.combinationCode === selectedRow.combinationCode 
-          ? { ...r, invoiceStatus: 'Need Edits', editComments: editComments } 
+          ? { ...r, invoiceStatus: 'Need Edits', editComments: remarksToSave, approvalRemarks: '' } 
           : r
       ));
     } else {
       setMasterData(prev => prev.map(r => 
         r.id === selectedRow.id 
-          ? { ...r, invoiceStatus: 'Need Edits', editComments: editComments } 
+          ? { ...r, invoiceStatus: 'Need Edits', editComments: remarksToSave, approvalRemarks: '' } 
           : r
       ));
     }
     
     // Notify finance about edits needed
-    addNotification('edit', `✏️ Invoice ${selectedRow.invoiceNo} marked as NEED EDITS by Director: "${editComments}"`, 'finance');
+    const remarksNote = remarksToSave ? `: "${remarksToSave}"` : '';
+    addNotification('edit', `✏️ Invoice ${selectedRow.invoiceNo} marked as NEED EDITS by Director${remarksNote}`, 'finance');
     
     // Data will auto-save in 1 second
     // Auto-save will handle this
@@ -2786,9 +2790,26 @@ ${generateInvoiceHtml(row)}
                                 
                                 <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                                   {row.invoiceGenerated ? (
-                                    <button onClick={() => openApprovalModal(row)} style={{ padding: '5px 10px', fontSize: '11px', fontWeight: isDirector ? '700' : '500', border: '1.5px solid', borderRadius: '6px', cursor: 'pointer', backgroundColor: row.invoiceStatus === 'Approved' ? '#DCFCE7' : (row.invoiceStatus === 'Need Edits' ? '#FEE2E2' : '#FEF3C7'), borderColor: row.invoiceStatus === 'Approved' ? '#22C55E' : (row.invoiceStatus === 'Need Edits' ? '#DC2626' : '#F59E0B'), color: row.invoiceStatus === 'Approved' ? '#166534' : (row.invoiceStatus === 'Need Edits' ? '#991B1B' : '#92400E') }}>
-                                      {isDirector ? (row.invoiceStatus === 'Approved' ? '✅ Approve' : '✏️ Review & Approve') : 'View Details'}
-                                    </button>
+                                    isDirector ? (
+                                      <button onClick={() => openApprovalModal(row)} style={{ padding: '5px 10px', fontSize: '11px', fontWeight: '700', border: '1.5px solid', borderRadius: '6px', cursor: 'pointer', backgroundColor: row.invoiceStatus === 'Approved' ? '#DCFCE7' : (row.invoiceStatus === 'Need Edits' ? '#FEE2E2' : '#FEF3C7'), borderColor: row.invoiceStatus === 'Approved' ? '#22C55E' : (row.invoiceStatus === 'Need Edits' ? '#DC2626' : '#F59E0B'), color: row.invoiceStatus === 'Approved' ? '#166534' : (row.invoiceStatus === 'Need Edits' ? '#991B1B' : '#92400E') }}>
+                                        {row.invoiceStatus === 'Approved' ? '✅ Approved' : (row.invoiceStatus === 'Need Edits' ? '✏️ Need Edits' : '⏳ Review')}
+                                      </button>
+                                    ) : (
+                                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                                        <span style={{ padding: '4px 10px', fontSize: '11px', fontWeight: '700', borderRadius: '6px', backgroundColor: row.invoiceStatus === 'Approved' ? '#DCFCE7' : (row.invoiceStatus === 'Need Edits' ? '#FEE2E2' : '#FEF3C7'), color: row.invoiceStatus === 'Approved' ? '#166534' : (row.invoiceStatus === 'Need Edits' ? '#991B1B' : '#92400E') }}>
+                                          {row.invoiceStatus === 'Approved' ? '✅ Approved' : (row.invoiceStatus === 'Need Edits' ? '✏️ Need Edits' : '⏳ Pending')}
+                                        </span>
+                                        {(row.editComments || row.approvalRemarks) && (
+                                          <button 
+                                            onClick={() => { setSelectedRow(row); setShowApprovalModal(true); }}
+                                            style={{ fontSize: '9px', color: row.invoiceStatus === 'Need Edits' ? '#991B1B' : '#166534', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
+                                            title={row.editComments || row.approvalRemarks}
+                                          >
+                                            View Remarks
+                                          </button>
+                                        )}
+                                      </div>
+                                    )
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
@@ -2805,7 +2826,10 @@ ${generateInvoiceHtml(row)}
                                       {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
                                   ) : row.invoiceGenerated ? (
-                                    <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
+                                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                      <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
+                                      {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
+                                    </div>
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
@@ -5275,10 +5299,19 @@ ${generateInvoiceHtml(row)}
               )}
             </div>
             
+            {/* Show Edit Comments (Need Edits remarks) */}
             {selectedRow.editComments && (
               <div style={{ backgroundColor: '#FEE2E2', padding: '12px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #FCA5A5' }}>
-                <div style={{ fontWeight: '600', color: '#991B1B', fontSize: '13px', marginBottom: '4px' }}>Previous Comments:</div>
+                <div style={{ fontWeight: '600', color: '#991B1B', fontSize: '13px', marginBottom: '4px' }}>📝 Need Edits - Director Remarks:</div>
                 <div style={{ fontSize: '13px', color: '#7F1D1D' }}>{selectedRow.editComments}</div>
+              </div>
+            )}
+            
+            {/* Show Approval Remarks */}
+            {selectedRow.approvalRemarks && selectedRow.invoiceStatus === 'Approved' && (
+              <div style={{ backgroundColor: '#DCFCE7', padding: '12px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #86EFAC' }}>
+                <div style={{ fontWeight: '600', color: '#166534', fontSize: '13px', marginBottom: '4px' }}>✅ Approved - Director Remarks:</div>
+                <div style={{ fontSize: '13px', color: '#15803D' }}>{selectedRow.approvalRemarks}</div>
               </div>
             )}
             
@@ -5331,19 +5364,23 @@ ${generateInvoiceHtml(row)}
                 </label>
               </div>
             ) : (
-              <div style={{ backgroundColor: '#FEF3C7', padding: '16px', borderRadius: '10px', marginBottom: '16px', border: '1px solid #FCD34D' }}>
-                <div style={{ fontWeight: '600', color: '#92400E', fontSize: '14px' }}>⚠️ Director Approval Required</div>
-                <div style={{ fontSize: '13px', color: '#A16207', marginTop: '6px' }}>Only the Director can approve or reject invoices. You can view the invoice details above.</div>
+              <div style={{ backgroundColor: selectedRow.invoiceStatus === 'Approved' ? '#DCFCE7' : (selectedRow.invoiceStatus === 'Need Edits' ? '#FEF3C7' : '#F8FAFC'), padding: '16px', borderRadius: '10px', marginBottom: '16px', border: '1px solid ' + (selectedRow.invoiceStatus === 'Approved' ? '#86EFAC' : (selectedRow.invoiceStatus === 'Need Edits' ? '#FCD34D' : '#E2E8F0')) }}>
+                <div style={{ fontWeight: '600', color: selectedRow.invoiceStatus === 'Approved' ? '#166534' : (selectedRow.invoiceStatus === 'Need Edits' ? '#92400E' : '#64748B'), fontSize: '14px' }}>
+                  {selectedRow.invoiceStatus === 'Approved' ? '✅ Approved by Director' : (selectedRow.invoiceStatus === 'Need Edits' ? '✏️ Edits Required by Director' : '⏳ Pending Director Approval')}
+                </div>
+                <div style={{ fontSize: '13px', color: selectedRow.invoiceStatus === 'Approved' ? '#15803D' : (selectedRow.invoiceStatus === 'Need Edits' ? '#A16207' : '#64748B'), marginTop: '6px' }}>
+                  {selectedRow.invoiceStatus === 'Approved' ? 'This invoice has been approved and is ready for mailing.' : (selectedRow.invoiceStatus === 'Need Edits' ? 'Please make the required changes and resubmit for approval.' : 'This invoice is awaiting Director approval.')}
+                </div>
               </div>
             )}
             
             {isDirector && (
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Remarks / Comments (required for Need Edits)</label>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>💬 Remarks (optional for Approve, visible to Finance)</label>
                 <textarea
                   value={editComments}
                   onChange={(e) => setEditComments(e.target.value)}
-                  placeholder="Enter comments for required changes..."
+                  placeholder="Enter remarks or comments..."
                   style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '13px', minHeight: '80px', resize: 'vertical', boxSizing: 'border-box' }}
                 />
               </div>
@@ -6016,7 +6053,7 @@ ${generateInvoiceHtml(row)}
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
       <div style={{ backgroundColor: '#FFFFFF', padding: '40px', borderRadius: '16px', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', width: '400px', maxWidth: '95vw' }}>
         <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#1E293B' }}>JAC Finance Automation</h1>
+          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#1E293B' }}>Finance Automation</h1>
           <p style={{ margin: '8px 0 0', color: '#64748B', fontSize: '14px' }}>Finance Management System</p>
         </div>
         
