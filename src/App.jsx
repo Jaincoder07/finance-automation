@@ -8,7 +8,7 @@ import {
   Search, X, Check, Printer, RefreshCw, Trash2, Image, Merge, FileCheck,
   ChevronDown, ChevronUp, Square, CheckSquare, Layers, Menu, ChevronLeft,
   Edit2, Save, ExternalLink, Clipboard, Table, Link2, Camera, FileDown, PlusCircle,
-  MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone
+  MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone, Lock
 } from 'lucide-react';
 import { saveAppState, loadAppState, subscribeToAppState } from './firebase';
 
@@ -320,14 +320,22 @@ export default function FinanceApp() {
   const [isSaving, setIsSaving] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   
-  // User credentials
+  // User credentials - passwords can be changed by users
+  const [userPasswords, setUserPasswords] = useState({
+    finance: 'finance123',
+    director: 'director123'
+  });
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
+  const [passwordError, setPasswordError] = useState('');
+
   const users = {
-    finance: { password: 'finance123', role: 'finance', name: 'Finance Team' },
-    director: { password: 'director123', role: 'director', name: 'Director' }
+    finance: { role: 'finance', name: 'Finance Team' },
+    director: { role: 'director', name: 'Director' }
   };
 
   const [companyConfig, setCompanyConfig] = useState({
-    name: 'Finance Automation',
+    name: 'JAC FinMate',
     brand: 'JAC',
     address: 'A-1701 Sweet Home CHS LTD, SVP, Plot No: 24',
     addressLine2: 'Andheri West, Nr Last Bus St',
@@ -344,7 +352,7 @@ export default function FinanceApp() {
       account: '921020009075531',
       branch: 'Andheri',
       ifsc: 'UTIB0000020',
-      holder: 'Finance Automation'
+      holder: 'JAC FinMate'
     },
     invoicePrefix: 'MB/2025-26/',
     hsnCode: '998365',
@@ -501,6 +509,7 @@ export default function FinanceApp() {
         if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
         if (data.partyMaster) setPartyMaster(data.partyMaster);
         if (data.followups) setFollowups(data.followups);
+        if (data.userPasswords) setUserPasswords(data.userPasswords);
         console.log('Data loaded from Firebase');
       }
     } catch (error) {
@@ -530,7 +539,8 @@ export default function FinanceApp() {
         notifications,
         whatsappSettings,
         partyMaster,
-        followups
+        followups,
+        userPasswords
       });
       setLastSaved(new Date());
       console.log('Data saved to Firebase');
@@ -538,7 +548,7 @@ export default function FinanceApp() {
       console.error('Error saving data:', error);
     }
     setIsSaving(false);
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords]);
 
   // Auto-save when data changes (debounced 1 second for faster sync)
   useEffect(() => {
@@ -563,7 +573,7 @@ export default function FinanceApp() {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, isLoggedIn]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords, isLoggedIn]);
 
   // ============================================
   // NOTIFICATION SYSTEM
@@ -625,7 +635,7 @@ export default function FinanceApp() {
       alert('Please enter phone number and API key first');
       return;
     }
-    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from Finance Automation. WhatsApp notifications are working!');
+    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from JAC FinMate. WhatsApp notifications are working!');
     alert('Test message sent! Check your WhatsApp.');
   };
   
@@ -685,7 +695,8 @@ export default function FinanceApp() {
   
   const handleLogin = async () => {
     const user = users[loginForm.username.toLowerCase()];
-    if (user && user.password === loginForm.password) {
+    const password = userPasswords[loginForm.username.toLowerCase()];
+    if (user && password === loginForm.password) {
       setIsLoggedIn(true);
       setUserRole(user.role);
       // Save to localStorage for persistence
@@ -696,6 +707,35 @@ export default function FinanceApp() {
     } else {
       setLoginError('Invalid username or password');
     }
+  };
+
+  const handlePasswordChange = () => {
+    if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setPasswordError('Please fill all fields');
+      return;
+    }
+    
+    const currentUser = userRole === 'director' ? 'director' : 'finance';
+    if (userPasswords[currentUser] !== passwordForm.currentPassword) {
+      setPasswordError('Current password is incorrect');
+      return;
+    }
+    
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('New passwords do not match');
+      return;
+    }
+    
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError('Password must be at least 6 characters');
+      return;
+    }
+    
+    setUserPasswords(prev => ({ ...prev, [currentUser]: passwordForm.newPassword }));
+    setShowPasswordModal(false);
+    setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    setPasswordError('');
+    alert('✅ Password changed successfully!');
   };
 
   const handleLogout = () => {
@@ -754,6 +794,7 @@ export default function FinanceApp() {
       if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
       if (data.partyMaster) setPartyMaster(data.partyMaster);
       if (data.followups) setFollowups(data.followups);
+      if (data.userPasswords) setUserPasswords(data.userPasswords);
       
       // Reset flag after a short delay
       setTimeout(() => {
@@ -2404,9 +2445,17 @@ ${generateInvoiceHtml(row)}
     const menuItems = userRole === 'director' ? directorMenuItems : financeMenuItems;
 
     return (
-      <div style={{ width: sidebarCollapsed ? '60px' : '200px', backgroundColor: '#1E293B', color: '#FFFFFF', display: 'flex', flexDirection: 'column', transition: 'width 0.2s ease', flexShrink: 0 }}>
+      <div style={{ width: sidebarCollapsed ? '60px' : '220px', backgroundColor: '#1E293B', color: '#FFFFFF', display: 'flex', flexDirection: 'column', transition: 'width 0.2s ease', flexShrink: 0 }}>
         <div style={{ padding: sidebarCollapsed ? '12px' : '16px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: sidebarCollapsed ? 'center' : 'space-between' }}>
-          {!sidebarCollapsed && <div><div style={{ fontSize: '15px', fontWeight: '700' }}>JAC Finance</div><div style={{ fontSize: '10px', color: '#94A3B8' }}>{userRole === 'director' ? 'Director View' : 'Finance Team'}</div></div>}
+          {!sidebarCollapsed && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <img src="/logo.png" alt="JAC" style={{ width: '32px', height: 'auto', borderRadius: '4px', backgroundColor: 'white', padding: '2px' }} />
+              <div>
+                <div style={{ fontSize: '16px', fontWeight: '700' }}>FinMate</div>
+                <div style={{ fontSize: '10px', color: '#94A3B8' }}>{userRole === 'director' ? 'Director View' : 'Finance Team'}</div>
+              </div>
+            </div>
+          )}
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', padding: '4px' }}>
             {sidebarCollapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}
           </button>
@@ -2483,8 +2532,12 @@ ${generateInvoiceHtml(row)}
             </button>
           ))}
         </nav>
-        {/* Logout button */}
+        {/* Change Password & Logout buttons */}
         <div style={{ padding: '8px', borderTop: '1px solid #334155' }}>
+          <button onClick={() => { setShowPasswordModal(true); setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); setPasswordError(''); }} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: sidebarCollapsed ? '12px' : '11px 14px', marginBottom: '8px', borderRadius: '8px', border: 'none', backgroundColor: '#475569', color: '#FFFFFF', cursor: 'pointer', fontSize: '14px', fontWeight: '500', justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }} title="Change Password">
+            <Lock size={18} />
+            {!sidebarCollapsed && <span>Change Password</span>}
+          </button>
           <button onClick={handleLogout} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: sidebarCollapsed ? '12px' : '11px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#DC2626', color: '#FFFFFF', cursor: 'pointer', fontSize: '14px', fontWeight: '600', justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }} title="Logout">
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
@@ -5454,6 +5507,113 @@ ${generateInvoiceHtml(row)}
         )}
       </Modal>
 
+      {/* Change Password Modal */}
+      <Modal isOpen={showPasswordModal} onClose={() => { setShowPasswordModal(false); setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); setPasswordError(''); }} title="🔐 Change Password" width="400px">
+        <div>
+          <div style={{ backgroundColor: '#EFF6FF', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '13px' }}><strong>User:</strong> {userRole === 'director' ? 'Director' : 'Finance Team'}</div>
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Current Password</label>
+            <input
+              type="password"
+              value={passwordForm.currentPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+              placeholder="Enter current password"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>New Password</label>
+            <input
+              type="password"
+              value={passwordForm.newPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+              placeholder="Enter new password (min 6 characters)"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Confirm New Password</label>
+            <input
+              type="password"
+              value={passwordForm.confirmPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+              placeholder="Confirm new password"
+              onKeyPress={(e) => e.key === 'Enter' && handlePasswordChange()}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          {passwordError && (
+            <div style={{ marginBottom: '16px', padding: '10px', backgroundColor: '#FEE2E2', borderRadius: '8px', color: '#991B1B', fontSize: '13px' }}>
+              {passwordError}
+            </div>
+          )}
+          
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <ActionButton label="Cancel" onClick={() => { setShowPasswordModal(false); setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); setPasswordError(''); }} />
+            <ActionButton label="Change Password" variant="brand" icon={Lock} onClick={handlePasswordChange} />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Change Password Modal */}
+      <Modal isOpen={showPasswordModal} onClose={() => { setShowPasswordModal(false); setPasswordError(''); setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); }} title="🔐 Change Password" width="400px">
+        <div>
+          <div style={{ backgroundColor: '#EFF6FF', padding: '12px', borderRadius: '8px', marginBottom: '16px' }}>
+            <div style={{ fontSize: '13px', color: '#1E40AF' }}>Changing password for: <strong>{userRole === 'director' ? 'Director' : 'Finance Team'}</strong></div>
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Current Password</label>
+            <input
+              type="password"
+              value={passwordForm.currentPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, currentPassword: e.target.value }))}
+              placeholder="Enter current password"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>New Password</label>
+            <input
+              type="password"
+              value={passwordForm.newPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, newPassword: e.target.value }))}
+              placeholder="Enter new password (min 6 chars)"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Confirm New Password</label>
+            <input
+              type="password"
+              value={passwordForm.confirmPassword}
+              onChange={(e) => setPasswordForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+              placeholder="Re-enter new password"
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
+            />
+          </div>
+          
+          {passwordError && (
+            <div style={{ marginBottom: '16px', padding: '10px', backgroundColor: '#FEE2E2', borderRadius: '8px', color: '#991B1B', fontSize: '13px' }}>
+              {passwordError}
+            </div>
+          )}
+          
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <ActionButton label="Cancel" onClick={() => { setShowPasswordModal(false); setPasswordError(''); setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' }); }} />
+            <ActionButton label="Change Password" variant="brand" icon={Lock} onClick={handlePasswordChange} />
+          </div>
+        </div>
+      </Modal>
+
       {/* Combine Modal */}
       <Modal isOpen={showCombineModal} onClose={() => { setShowCombineModal(false); setSelectedForCombine(new Set()); setCombineParty(null); }} title="🔗 Combine Invoices" width="700px">
         {combineParty && (
@@ -6050,48 +6210,138 @@ ${generateInvoiceHtml(row)}
 
   // Login Screen
   const renderLoginScreen = () => (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
-      <div style={{ backgroundColor: '#FFFFFF', padding: '40px', borderRadius: '16px', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', width: '400px', maxWidth: '95vw' }}>
-        <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: '700', color: '#1E293B' }}>Finance Automation</h1>
-          <p style={{ margin: '8px 0 0', color: '#64748B', fontSize: '14px' }}>Finance Management System</p>
-        </div>
-        
-        <div style={{ marginBottom: '20px' }}>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Username</label>
-          <input
-            type="text"
-            value={loginForm.username}
-            onChange={(e) => setLoginForm(prev => ({ ...prev, username: e.target.value }))}
-            placeholder="Enter username"
-            style={{ width: '100%', padding: '12px 14px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
-          />
-        </div>
-        
-        <div style={{ marginBottom: '24px' }}>
-          <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>Password</label>
-          <input
-            type="password"
-            value={loginForm.password}
-            onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
-            placeholder="Enter password"
-            onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-            style={{ width: '100%', padding: '12px 14px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '14px', boxSizing: 'border-box' }}
-          />
-        </div>
-        
-        {loginError && (
-          <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#FEE2E2', borderRadius: '8px', color: '#991B1B', fontSize: '13px', textAlign: 'center' }}>
-            {loginError}
+    <div style={{ 
+      minHeight: '100vh', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center', 
+      background: 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 50%, #1E3A5F 100%)',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      padding: '20px'
+    }}>
+      <div style={{ 
+        backgroundColor: '#FFFFFF', 
+        padding: '0', 
+        borderRadius: '24px', 
+        boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)', 
+        width: '420px', 
+        maxWidth: '95vw',
+        overflow: 'hidden'
+      }}>
+        {/* Header with gradient */}
+        <div style={{ 
+          background: 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 100%)',
+          padding: '32px 40px',
+          textAlign: 'center'
+        }}>
+          {/* Logo + FinMate together */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '8px' }}>
+            <img src="/logo.png" alt="JAC" style={{ width: '60px', height: 'auto', borderRadius: '8px', backgroundColor: 'white', padding: '4px' }} />
+            <span style={{ fontSize: '36px', fontWeight: '800', color: '#FFFFFF', letterSpacing: '-1px' }}>FinMate</span>
           </div>
-        )}
+          <p style={{ margin: 0, color: 'rgba(255,255,255,0.8)', fontSize: '14px', fontWeight: '500' }}>Finance Management System</p>
+        </div>
         
-        <button
-          onClick={handleLogin}
-          style={{ width: '100%', padding: '14px', fontSize: '15px', fontWeight: '600', border: 'none', borderRadius: '10px', cursor: 'pointer', backgroundColor: '#2874A6', color: 'white' }}
-        >
-          Login
-        </button>
+        {/* Form section */}
+        <div style={{ padding: '32px 40px' }}>
+          <div style={{ marginBottom: '24px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#1E3A5F', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Username</label>
+            <div style={{ position: 'relative' }}>
+              <Users size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+              <input
+                type="text"
+                value={loginForm.username}
+                onChange={(e) => setLoginForm(prev => ({ ...prev, username: e.target.value }))}
+                placeholder="Enter username"
+                style={{ 
+                  width: '100%', 
+                  padding: '14px 14px 14px 44px', 
+                  borderRadius: '12px', 
+                  border: '2px solid #E2E8F0', 
+                  fontSize: '15px', 
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s, box-shadow 0.2s',
+                  outline: 'none'
+                }}
+                onFocus={(e) => { e.target.style.borderColor = '#2874A6'; e.target.style.boxShadow = '0 0 0 3px rgba(40,116,166,0.1)'; }}
+                onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; e.target.style.boxShadow = 'none'; }}
+              />
+            </div>
+          </div>
+          
+          <div style={{ marginBottom: '28px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#1E3A5F', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Password</label>
+            <div style={{ position: 'relative' }}>
+              <Lock size={18} style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+              <input
+                type="password"
+                value={loginForm.password}
+                onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
+                placeholder="Enter password"
+                onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                style={{ 
+                  width: '100%', 
+                  padding: '14px 14px 14px 44px', 
+                  borderRadius: '12px', 
+                  border: '2px solid #E2E8F0', 
+                  fontSize: '15px', 
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s, box-shadow 0.2s',
+                  outline: 'none'
+                }}
+                onFocus={(e) => { e.target.style.borderColor = '#2874A6'; e.target.style.boxShadow = '0 0 0 3px rgba(40,116,166,0.1)'; }}
+                onBlur={(e) => { e.target.style.borderColor = '#E2E8F0'; e.target.style.boxShadow = 'none'; }}
+              />
+            </div>
+          </div>
+          
+          {loginError && (
+            <div style={{ 
+              marginBottom: '20px', 
+              padding: '14px', 
+              backgroundColor: '#FEF2F2', 
+              borderRadius: '12px', 
+              color: '#DC2626', 
+              fontSize: '14px', 
+              textAlign: 'center',
+              border: '1px solid #FECACA',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}>
+              <AlertCircle size={18} />
+              {loginError}
+            </div>
+          )}
+          
+          <button
+            onClick={handleLogin}
+            style={{ 
+              width: '100%', 
+              padding: '16px', 
+              fontSize: '16px', 
+              fontWeight: '700', 
+              border: 'none', 
+              borderRadius: '12px', 
+              cursor: 'pointer', 
+              background: 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 100%)',
+              color: 'white',
+              transition: 'transform 0.2s, box-shadow 0.2s',
+              boxShadow: '0 4px 14px rgba(40,116,166,0.4)'
+            }}
+            onMouseOver={(e) => { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = '0 6px 20px rgba(40,116,166,0.5)'; }}
+            onMouseOut={(e) => { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = '0 4px 14px rgba(40,116,166,0.4)'; }}
+          >
+            Sign In
+          </button>
+          
+          <div style={{ marginTop: '24px', textAlign: 'center', color: '#94A3B8', fontSize: '12px' }}>
+            <span>Powered by </span>
+            <span style={{ fontWeight: '600', color: '#1E3A5F' }}>JAC</span>
+            <span> • Strategy | Talent | Results</span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -6104,11 +6354,22 @@ ${generateInvoiceHtml(row)}
   // Show loading screen while fetching data
   if (isLoading) {
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F9', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
+      <div style={{ 
+        minHeight: '100vh', 
+        display: 'flex', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        background: 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 50%, #1E3A5F 100%)',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' 
+      }}>
         <div style={{ textAlign: 'center' }}>
-          <Loader2 size={48} style={{ animation: 'spin 1s linear infinite', color: '#2874A6', marginBottom: '16px' }} />
-          <div style={{ fontSize: '18px', fontWeight: '600', color: '#1E293B' }}>Loading your data...</div>
-          <div style={{ fontSize: '14px', color: '#64748B', marginTop: '8px' }}>Please wait while we sync with the cloud</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '24px' }}>
+            <img src="/logo.png" alt="JAC" style={{ width: '50px', height: 'auto', borderRadius: '8px', backgroundColor: 'white', padding: '4px' }} />
+            <span style={{ fontSize: '32px', fontWeight: '800', color: '#FFFFFF', letterSpacing: '-1px' }}>FinMate</span>
+          </div>
+          <Loader2 size={48} style={{ animation: 'spin 1s linear infinite', color: '#FFFFFF', marginBottom: '16px' }} />
+          <div style={{ fontSize: '18px', fontWeight: '600', color: '#FFFFFF' }}>Loading your data...</div>
+          <div style={{ fontSize: '14px', color: 'rgba(255,255,255,0.7)', marginTop: '8px' }}>Please wait while we sync with the cloud</div>
         </div>
         <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
       </div>
