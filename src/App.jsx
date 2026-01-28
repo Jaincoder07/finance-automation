@@ -8,7 +8,7 @@ import {
   Search, X, Check, Printer, RefreshCw, Trash2, Image, Merge, FileCheck,
   ChevronDown, ChevronUp, Square, CheckSquare, Layers, Menu, ChevronLeft,
   Edit2, Save, ExternalLink, Clipboard, Table, Link2, Camera, FileDown, PlusCircle,
-  MessageSquare, ThumbsUp, Edit3, Loader2
+  MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone
 } from 'lucide-react';
 import { saveAppState, loadAppState } from './firebase';
 
@@ -374,6 +374,34 @@ export default function FinanceApp() {
   const [newEmailInput, setNewEmailInput] = useState('');
   const [editComments, setEditComments] = useState('');
   
+  // Ledger Period & Search
+  const [ledgerPeriod, setLedgerPeriod] = useState({
+    fromDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    toDate: new Date().toISOString().split('T')[0]
+  });
+  const [ledgerPartySearch, setLedgerPartySearch] = useState('');
+  
+  // Master Sheet Tabs
+  const [masterSheetTab, setMasterSheetTab] = useState('open'); // 'open' or 'closed'
+  
+  // Invoice Register Filters
+  const [invoiceFilters, setInvoiceFilters] = useState({
+    party: '', invoiceStatus: '', receiptStatus: '', invoiceType: '', searchText: ''
+  });
+  
+  // Notifications
+  const [notifications, setNotifications] = useState([]);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  
+  // WhatsApp Notification Settings (using CallMeBot - FREE)
+  const [whatsappSettings, setWhatsappSettings] = useState({
+    enabled: false,
+    financePhone: '',
+    financeApiKey: '',
+    directorPhone: '',
+    directorApiKey: ''
+  });
+  
   const [receiptForm, setReceiptForm] = useState({
     amount: '', tds: '', discount: '', narration: '', paymentAdvisory: null,
     date: new Date().toISOString().split('T')[0], mode: 'Bank'
@@ -440,6 +468,8 @@ export default function FinanceApp() {
         if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
         if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
         if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
+        if (data.notifications) setNotifications(data.notifications);
+        if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
         console.log('Data loaded from Firebase');
       }
     } catch (error) {
@@ -465,7 +495,9 @@ export default function FinanceApp() {
         nextCombineNo,
         nextReceiptNo,
         nextCreditNoteNo,
-        invoiceValues
+        invoiceValues,
+        notifications,
+        whatsappSettings
       });
       setLastSaved(new Date());
       console.log('Data saved to Firebase');
@@ -473,7 +505,7 @@ export default function FinanceApp() {
       console.error('Error saving data:', error);
     }
     setIsSaving(false);
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings]);
 
   // Auto-save when data changes (debounced 2 seconds)
   useEffect(() => {
@@ -492,7 +524,117 @@ export default function FinanceApp() {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, isLoggedIn]);
+  }, [masterData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, invoiceValues, notifications, whatsappSettings, isLoggedIn]);
+
+  // ============================================
+  // NOTIFICATION SYSTEM
+  // ============================================
+  
+  // Send WhatsApp notification using CallMeBot API (FREE)
+  const sendWhatsAppNotification = async (type, message, forRole) => {
+    // Check if WhatsApp notifications are enabled
+    if (!whatsappSettings.enabled) {
+      console.log('WhatsApp notifications not enabled');
+      return;
+    }
+    
+    // Determine recipient based on forRole
+    if (forRole === 'finance' && whatsappSettings.financePhone && whatsappSettings.financeApiKey) {
+      sendSingleWhatsApp(whatsappSettings.financePhone, whatsappSettings.financeApiKey, type, message);
+    } else if (forRole === 'director' && whatsappSettings.directorPhone && whatsappSettings.directorApiKey) {
+      sendSingleWhatsApp(whatsappSettings.directorPhone, whatsappSettings.directorApiKey, type, message);
+    } else if (forRole === 'all') {
+      // Send to both if configured
+      if (whatsappSettings.financePhone && whatsappSettings.financeApiKey) {
+        sendSingleWhatsApp(whatsappSettings.financePhone, whatsappSettings.financeApiKey, type, message);
+      }
+      if (whatsappSettings.directorPhone && whatsappSettings.directorApiKey) {
+        sendSingleWhatsApp(whatsappSettings.directorPhone, whatsappSettings.directorApiKey, type, message);
+      }
+    }
+  };
+  
+  const sendSingleWhatsApp = async (phone, apiKey, type, message) => {
+    try {
+      const typeLabels = {
+        'upload': '📊 DATA UPLOAD',
+        'invoice': '🧾 INVOICE',
+        'approval': '✅ APPROVED',
+        'edit': '✏️ EDIT REQUIRED',
+        'receipt': '💰 PAYMENT',
+        'info': '📌 UPDATE'
+      };
+      
+      const fullMessage = `*${typeLabels[type] || '📌 NOTIFICATION'}*\n\n${message}\n\n_${companyConfig.name}_\n_${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}_`;
+      
+      // CallMeBot API - completely FREE
+      const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(fullMessage)}&apikey=${apiKey}`;
+      
+      // Use fetch with no-cors mode (CallMeBot doesn't support CORS but still works)
+      fetch(url, { mode: 'no-cors' })
+        .then(() => console.log('WhatsApp notification sent to:', phone))
+        .catch(err => console.log('WhatsApp send attempted:', phone));
+        
+    } catch (error) {
+      console.error('Failed to send WhatsApp notification:', error);
+    }
+  };
+  
+  // Test WhatsApp connection
+  const testWhatsAppNotification = (phone, apiKey) => {
+    if (!phone || !apiKey) {
+      alert('Please enter phone number and API key first');
+      return;
+    }
+    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from INDREESH MEDIA Finance App. WhatsApp notifications are working!');
+    alert('Test message sent! Check your WhatsApp.');
+  };
+  
+  const addNotification = (type, message, forRole = 'all') => {
+    const newNotification = {
+      id: Date.now() + Math.random(),
+      type, // 'upload', 'invoice', 'approval', 'receipt', 'edit', 'info'
+      message,
+      forRole, // 'finance', 'director', 'all'
+      createdAt: new Date().toISOString(),
+      createdBy: userRole,
+      read: { finance: false, director: false }
+    };
+    setNotifications(prev => [newNotification, ...prev].slice(0, 50)); // Keep last 50 notifications
+    
+    // Send WhatsApp notification
+    sendWhatsAppNotification(type, message, forRole);
+  };
+
+  const markNotificationAsRead = (notificationId) => {
+    setNotifications(prev => prev.map(n => {
+      if (n.id === notificationId) {
+        return { ...n, read: { ...n.read, [userRole]: true } };
+      }
+      return n;
+    }));
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setNotifications(prev => prev.map(n => ({
+      ...n, read: { ...n.read, [userRole]: true }
+    })));
+  };
+
+  const clearAllNotifications = () => {
+    setNotifications([]);
+  };
+
+  // Get notifications for current user role
+  const userNotifications = useMemo(() => {
+    return notifications.filter(n => 
+      n.forRole === 'all' || n.forRole === userRole || n.createdBy !== userRole
+    );
+  }, [notifications, userRole]);
+
+  const unreadCount = useMemo(() => {
+    return userNotifications.filter(n => !n.read[userRole]).length;
+  }, [userNotifications, userRole]);
 
   // ============================================
   // LOGIN HANDLING
@@ -694,19 +836,45 @@ export default function FinanceApp() {
       approvedDate: new Date().toISOString()
     };
     
+    // Get all campaigns for this invoice
+    let invoiceCampaigns = [];
     if (selectedRow.invoiceType === 'Combined' && selectedRow.combinationCode !== 'NA') {
+      invoiceCampaigns = masterData.filter(r => r.combinationCode === selectedRow.combinationCode);
       setMasterData(prev => prev.map(r => 
         r.combinationCode === selectedRow.combinationCode 
           ? { ...r, ...approvalData } 
           : r
       ));
     } else {
+      invoiceCampaigns = [selectedRow];
       setMasterData(prev => prev.map(r => 
         r.id === selectedRow.id 
           ? { ...r, ...approvalData } 
           : r
       ));
     }
+    
+    // Create ledger entry on approval with proper format
+    const totalAmount = parseFloat(selectedRow.invoiceTotalAmount) || 0;
+    const campaignDetails = invoiceCampaigns.map(c => c.senderName || c.campaignName?.split('--')[0]?.trim()).join(', ');
+    const narration = `${selectedRow.invoiceNo} - ${campaignDetails}`;
+    
+    setLedgerEntries(prev => [...prev, { 
+      id: Date.now(), 
+      partyName: selectedRow.partyName, 
+      date: selectedRow.invoiceDate, 
+      particulars: 'Promotional Trade Mailer', 
+      narration: narration,
+      debit: totalAmount, 
+      credit: 0, 
+      type: 'invoice', 
+      invoiceNo: selectedRow.invoiceNo,
+      combinationCode: selectedRow.combinationCode
+    }]);
+    
+    // Notify finance about approval
+    addNotification('approval', `✅ Invoice ${selectedRow.invoiceNo} has been APPROVED by Director - ready for mailing`, 'finance');
+    
     setShowApprovalModal(false);
     setSelectedRow(null);
     setApprovalChecks({ particularsApproved: false, emailApproved: false, invoiceTypeApproved: false });
@@ -732,6 +900,10 @@ export default function FinanceApp() {
           : r
       ));
     }
+    
+    // Notify finance about edits needed
+    addNotification('edit', `✏️ Invoice ${selectedRow.invoiceNo} marked as NEED EDITS by Director: "${editComments}"`, 'finance');
+    
     setShowApprovalModal(false);
     setSelectedRow(null);
     setEditComments('');
@@ -759,6 +931,16 @@ export default function FinanceApp() {
   const handleReceiptSubmit = () => {
     if (!selectedRow || !receiptForm.amount) {
       alert('Please enter receipt amount');
+      return;
+    }
+    
+    // Check if invoice is approved and mailed
+    if (selectedRow.invoiceStatus !== 'Approved') {
+      alert('Receipt cannot be posted. Invoice must be approved first.');
+      return;
+    }
+    if (selectedRow.mailingSent !== 'Yes') {
+      alert('Receipt cannot be posted. Invoice must be mailed first.');
       return;
     }
     
@@ -791,21 +973,22 @@ export default function FinanceApp() {
     
     setReceipts(prev => [...prev, newReceipt]);
     
-    // Add to ledger - Promotional Trade Mailer as particulars
-    const ledgerNarration = receiptForm.narration ? `${shortNarration} | ${receiptForm.narration}` : shortNarration;
+    // Add to ledger - Payment Received as particulars with narration
+    const paymentNarration = receiptForm.narration || shortNarration;
     
     if (receiptAmount > 0) {
       setLedgerEntries(prev => [...prev, {
         id: Date.now(),
         partyName: selectedRow.partyName,
         date: receiptForm.date,
-        particulars: 'Promotional Trade Mailer',
-        narration: ledgerNarration,
+        particulars: `Payment Received - ${paymentNarration}`,
+        narration: `${selectedRow.invoiceNo} | ${receiptForm.mode}`,
         debit: 0,
         credit: receiptAmount,
         type: 'receipt',
         receiptNo,
-        invoiceNo: selectedRow.invoiceNo
+        invoiceNo: selectedRow.invoiceNo,
+        paymentAdvisory: receiptForm.paymentAdvisory
       }]);
     }
     
@@ -855,6 +1038,10 @@ export default function FinanceApp() {
     }
     
     setNextReceiptNo(prev => prev + 1);
+    
+    // Notify director about payment received
+    addNotification('receipt', `💰 Payment received for ${selectedRow.partyName} - Receipt ${receiptNo} - ${formatCurrency(totalCredit)}`, 'director');
+    
     setShowReceiptModal(false);
     setSelectedRow(null);
     setReceiptForm({ amount: '', tds: '', discount: '', narration: '', paymentAdvisory: null, date: new Date().toISOString().split('T')[0], mode: 'Bank' });
@@ -956,7 +1143,11 @@ export default function FinanceApp() {
             invoiceType: 'Individual', // Reset to Individual for re-selection
             combinationCode: 'NA',
             mailingSent: 'No',
-            editComments: ''
+            mailDate: '',
+            editComments: '',
+            receiptStatus: '',
+            receiptNo: '',
+            receiptDate: ''
           };
         }
         return r;
@@ -975,7 +1166,11 @@ export default function FinanceApp() {
             invoiceType: 'Individual',
             combinationCode: 'NA',
             mailingSent: 'No',
-            editComments: ''
+            mailDate: '',
+            editComments: '',
+            receiptStatus: '',
+            receiptNo: '',
+            receiptDate: ''
           };
         }
         return r;
@@ -985,9 +1180,17 @@ export default function FinanceApp() {
     // Remove from ledger
     setLedgerEntries(prev => prev.filter(e => e.invoiceNo !== invoiceNo));
     
+    // Remove any receipts associated with this invoice
+    const deletedReceipts = receipts.filter(r => r.invoiceNo === invoiceNo);
+    if (deletedReceipts.length > 0) {
+      setReceipts(prev => prev.filter(r => r.invoiceNo !== invoiceNo));
+    }
+    
     setShowDeleteConfirmModal(false);
     setSelectedRow(null);
-    alert(`✅ Invoice ${invoiceNo} deleted. You can now regenerate the invoice.`);
+    
+    const receiptMsg = deletedReceipts.length > 0 ? `\n${deletedReceipts.length} receipt(s) also deleted.` : '';
+    alert(`✅ Invoice ${invoiceNo} deleted.${receiptMsg}\n\nYou can now regenerate the invoice.`);
   };
 
   // ============================================
@@ -1110,6 +1313,12 @@ export default function FinanceApp() {
       if (duplicateCount > 0) {
         message += `• ${duplicateCount} duplicate entries skipped`;
       }
+      
+      // Add notification for director
+      if (addedCount > 0) {
+        addNotification('upload', `📊 ${addedCount} new campaigns uploaded to Master Sheet`, 'director');
+      }
+      
       alert(message);
     };
     reader.readAsBinaryString(file);
@@ -1156,16 +1365,22 @@ export default function FinanceApp() {
   };
 
   const updateBillingStatus = (rowId, status) => {
-    setMasterData(prev => prev.map(row => {
-      if (row.id === rowId) {
-        if (status === 'Yes' && row.invoiceAmount) {
-          const gst = calculateGst(row);
-          return { ...row, toBeBilled: status, cgst: gst.cgst.toFixed(2), sgst: gst.sgst.toFixed(2), igst: gst.igst.toFixed(2), totalWithGst: gst.total.toFixed(2) };
+    const row = masterData.find(r => r.id === rowId);
+    setMasterData(prev => prev.map(r => {
+      if (r.id === rowId) {
+        if (status === 'Yes' && r.invoiceAmount) {
+          const gst = calculateGst(r);
+          return { ...r, toBeBilled: status, cgst: gst.cgst.toFixed(2), sgst: gst.sgst.toFixed(2), igst: gst.igst.toFixed(2), totalWithGst: gst.total.toFixed(2) };
         }
-        return { ...row, toBeBilled: status };
+        return { ...r, toBeBilled: status };
       }
-      return row;
+      return r;
     }));
+    
+    // Notify finance when director marks campaign for billing
+    if (status === 'Yes' && row) {
+      addNotification('info', `📋 Campaign marked for billing: ${row.partyName} - ${row.senderName}`, 'finance');
+    }
   };
 
   const updateRowField = (rowId, field, value) => {
@@ -1190,6 +1405,11 @@ export default function FinanceApp() {
     } else {
       setMasterData(prev => prev.map(r => r.id === rowId ? { ...r, mailingSent: status } : r));
     }
+    
+    // Notify director when mail is sent
+    if (status === 'Yes') {
+      addNotification('info', `📧 Invoice ${row.invoiceNo} mailed to ${row.partyName}`, 'director');
+    }
   };
 
   // ============================================
@@ -1208,9 +1428,14 @@ export default function FinanceApp() {
       return r;
     }));
     
-    setLedgerEntries(prev => [...prev, { id: Date.now(), partyName: row.partyName, date: invoiceDate, particulars: `Invoice ${invoiceNo} - ${row.senderName}`, debit: totalAmount, credit: 0, type: 'invoice', invoiceNo }]);
+    // Note: Ledger entry will be created only when invoice is approved
     setNextInvoiceNo(prev => prev + 1);
+    
+    // Notify director about new invoice
+    addNotification('invoice', `🧾 New Invoice ${invoiceNo} created for ${row.partyName} - ${formatCurrency(totalAmount)}`, 'director');
+    
     alert(`✅ Invoice Generated!\n\nInvoice No: ${invoiceNo}\nAmount: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
+  };
   };
 
   const generateCombinedInvoice = () => {
@@ -1236,13 +1461,15 @@ export default function FinanceApp() {
       return r;
     }));
 
-    const campaignNames = selectedRows.map(r => r.senderName).join(', ');
-    setLedgerEntries(prev => [...prev, { id: Date.now(), partyName: combineParty, date: invoiceDate, particulars: `Combined Invoice ${invoiceNo} - ${campaignNames}`, debit: totalAmount, credit: 0, type: 'invoice', invoiceNo, combinationCode }]);
-
+    // Note: Ledger entry will be created only when invoice is approved
     setNextInvoiceNo(prev => prev + 1);
     setNextCombineNo(prev => prev + 1);
     setShowCombineModal(false);
     setSelectedForCombine(new Set());
+    
+    // Notify director about new combined invoice
+    addNotification('invoice', `🧾 Combined Invoice ${invoiceNo} created for ${combineParty} (${selectedRows.length} campaigns) - ${formatCurrency(totalAmount)}`, 'director');
+    
     setCombineParty(null);
     alert(`✅ Combined Invoice Generated!\n\nInvoice No: ${invoiceNo}\nCampaigns: ${selectedForCombine.size}\nTotal: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
   };
@@ -1628,6 +1855,52 @@ ${generateInvoiceHtml(row)}
             )}
           </div>
         )}
+        
+        {/* Notifications Bell */}
+        <div style={{ padding: '8px', borderBottom: '1px solid #334155' }}>
+          <button 
+            onClick={() => setShowNotificationsModal(true)} 
+            style={{ 
+              width: '100%', 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '10px', 
+              padding: sidebarCollapsed ? '12px' : '11px 14px', 
+              borderRadius: '8px', 
+              border: 'none', 
+              backgroundColor: unreadCount > 0 ? '#FEF3C7' : '#334155', 
+              color: unreadCount > 0 ? '#92400E' : '#94A3B8', 
+              cursor: 'pointer', 
+              fontSize: '14px', 
+              fontWeight: unreadCount > 0 ? '700' : '500', 
+              justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+              position: 'relative'
+            }} 
+            title="Notifications"
+          >
+            {unreadCount > 0 ? <BellRing size={18} /> : <Bell size={18} />}
+            {!sidebarCollapsed && <span>Notifications</span>}
+            {unreadCount > 0 && (
+              <span style={{ 
+                position: sidebarCollapsed ? 'absolute' : 'static',
+                top: sidebarCollapsed ? '4px' : 'auto',
+                right: sidebarCollapsed ? '4px' : 'auto',
+                marginLeft: sidebarCollapsed ? '0' : 'auto',
+                backgroundColor: '#DC2626', 
+                color: '#FFFFFF', 
+                padding: '2px 6px', 
+                borderRadius: '10px', 
+                fontSize: '11px', 
+                fontWeight: '700',
+                minWidth: '18px',
+                textAlign: 'center'
+              }}>
+                {unreadCount}
+              </span>
+            )}
+          </button>
+        </div>
+        
         <nav style={{ flex: 1, padding: '8px' }}>
           {menuItems.map(item => (
             <button key={item.id} onClick={() => setActiveMenu(item.id)} style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', padding: sidebarCollapsed ? '12px' : '11px 14px', marginBottom: '4px', borderRadius: '8px', border: 'none', backgroundColor: activeMenu === item.id ? '#2874A6' : 'transparent', color: activeMenu === item.id ? '#FFFFFF' : '#94A3B8', cursor: 'pointer', fontSize: '14px', fontWeight: activeMenu === item.id ? '600' : '500', justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }} title={item.label}>
@@ -1700,7 +1973,57 @@ ${generateInvoiceHtml(row)}
   // ============================================
   
   const renderMasterSheet = () => {
-    const partyNames = Object.keys(groupedData).sort();
+    // Separate open and closed invoices
+    // Closed = billed (toBeBilled=Yes) + invoiced + mailed (mailingSent=Yes) + receipt received (receiptStatus=Received)
+    const closedInvoices = masterData.filter(r => 
+      r.toBeBilled === 'Yes' && 
+      r.invoiceGenerated && 
+      r.mailingSent === 'Yes' && 
+      r.receiptStatus === 'Received'
+    );
+    const openInvoices = masterData.filter(r => 
+      !(r.toBeBilled === 'Yes' && 
+        r.invoiceGenerated && 
+        r.mailingSent === 'Yes' && 
+        r.receiptStatus === 'Received')
+    );
+    
+    // Apply filters to the current tab's data
+    const currentTabData = masterSheetTab === 'open' ? openInvoices : closedInvoices;
+    const filteredTabData = currentTabData.filter(row => {
+      if (filters.party && row.partyName !== filters.party) return false;
+      if (filters.billStatus && row.toBeBilled !== filters.billStatus) return false;
+      if (filters.invoiceType && row.invoiceType !== filters.invoiceType) return false;
+      if (filters.mailingStatus) {
+        if (filters.mailingStatus === 'Sent' && row.mailingSent !== 'Yes') return false;
+        if (filters.mailingStatus === 'Not Sent' && row.mailingSent === 'Yes') return false;
+      }
+      if (filters.invoiceStatus) {
+        if (filters.invoiceStatus === 'Generated' && !row.invoiceGenerated) return false;
+        if (filters.invoiceStatus === 'Not Generated' && row.invoiceGenerated) return false;
+        if (filters.invoiceStatus === 'Approved' && row.invoiceStatus !== 'Approved') return false;
+        if (filters.invoiceStatus === 'Need Edits' && row.invoiceStatus !== 'Need Edits') return false;
+        if (filters.invoiceStatus === 'Paid' && row.invoiceStatus !== 'Paid') return false;
+      }
+      if (filters.searchText) {
+        const search = filters.searchText.toLowerCase();
+        if (!row.partyName?.toLowerCase().includes(search) && 
+            !row.senderName?.toLowerCase().includes(search) && 
+            !row.campaignName?.toLowerCase().includes(search) && 
+            !row.subject?.toLowerCase().includes(search) &&
+            !row.invoiceNo?.toLowerCase().includes(search)) return false;
+      }
+      return true;
+    });
+    
+    const groupedTabData = filteredTabData.reduce((acc, row) => {
+      const party = row.partyName || 'Unknown';
+      if (!acc[party]) acc[party] = [];
+      acc[party].push(row);
+      return acc;
+    }, {});
+    
+    const partyNames = Object.keys(groupedTabData).sort();
 
     return (
       <div>
@@ -1718,20 +2041,46 @@ ${generateInvoiceHtml(row)}
           </div>
         </div>
 
+        {/* Tabs for Open/Closed Invoices */}
+        <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', backgroundColor: '#F1F5F9', padding: '4px', borderRadius: '10px', width: 'fit-content' }}>
+          <button
+            onClick={() => setMasterSheetTab('open')}
+            style={{
+              padding: '10px 20px', fontSize: '14px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer',
+              backgroundColor: masterSheetTab === 'open' ? '#FFFFFF' : 'transparent',
+              color: masterSheetTab === 'open' ? '#1E293B' : '#64748B',
+              boxShadow: masterSheetTab === 'open' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+            }}
+          >
+            📂 Open Invoices ({openInvoices.length})
+          </button>
+          <button
+            onClick={() => setMasterSheetTab('closed')}
+            style={{
+              padding: '10px 20px', fontSize: '14px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer',
+              backgroundColor: masterSheetTab === 'closed' ? '#FFFFFF' : 'transparent',
+              color: masterSheetTab === 'closed' ? '#1E293B' : '#64748B',
+              boxShadow: masterSheetTab === 'closed' ? '0 2px 4px rgba(0,0,0,0.1)' : 'none'
+            }}
+          >
+            ✅ Closed Invoices ({closedInvoices.length})
+          </button>
+        </div>
+
         {masterData.length > 0 && renderFilters()}
 
         {partyNames.length === 0 ? (
           <Card>
             <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>
               <Upload size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
-              <div style={{ fontSize: '18px', fontWeight: '600' }}>{hasActiveFilters ? 'No matching records' : 'No Data Yet'}</div>
-              <div style={{ fontSize: '14px', marginTop: '4px' }}>{hasActiveFilters ? 'Try adjusting your filters' : 'Upload an Excel file to get started'}</div>
+              <div style={{ fontSize: '18px', fontWeight: '600' }}>{hasActiveFilters ? 'No matching records' : (masterSheetTab === 'closed' ? 'No closed invoices yet' : 'No Data Yet')}</div>
+              <div style={{ fontSize: '14px', marginTop: '4px' }}>{hasActiveFilters ? 'Try adjusting your filters' : (masterSheetTab === 'closed' ? 'Invoices will appear here once billed, mailed, and payment received' : 'Upload an Excel file to get started')}</div>
             </div>
           </Card>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {partyNames.map(party => {
-              const rows = groupedData[party];
+              const rows = groupedTabData[party];
               const isExpanded = expandedParties.has(party);
               const billedCount = rows.filter(r => r.toBeBilled === 'Yes').length;
               const invoicedCount = rows.filter(r => r.invoiceGenerated).length;
@@ -1739,12 +2088,12 @@ ${generateInvoiceHtml(row)}
 
               return (
                 <div key={party} style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', border: '1px solid #E2E8F0', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-                  <div onClick={() => togglePartyExpansion(party)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
+                  <div onClick={() => togglePartyExpansion(party)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: masterSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       {isExpanded ? <ChevronDown size={22} color="#2874A6" /> : <ChevronRight size={22} color="#64748B" />}
                       <div>
                         <div style={{ fontWeight: '700', fontSize: '16px', color: '#1E293B' }}>{party}</div>
-                        <div style={{ fontSize: '13px', color: '#64748B', marginTop: '3px' }}>{rows.length} campaigns • {billedCount} to bill • {invoicedCount} invoiced</div>
+                        <div style={{ fontSize: '13px', color: '#64748B', marginTop: '3px' }}>{rows.length} campaigns • {billedCount} billed • {invoicedCount} invoiced</div>
                       </div>
                     </div>
                     {partyTotal > 0 && (
@@ -1757,7 +2106,7 @@ ${generateInvoiceHtml(row)}
 
                   {isExpanded && (
                     <div style={{ overflowX: 'auto' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '1800px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', minWidth: '2100px' }}>
                         <thead>
                           <tr style={{ backgroundColor: '#F1F5F9' }}>
                             <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700', color: '#475569', borderBottom: '2px solid #E2E8F0', width: '90px' }}>Date</th>
@@ -1776,6 +2125,8 @@ ${generateInvoiceHtml(row)}
                             <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', color: '#475569', borderBottom: '2px solid #E2E8F0', width: '120px' }}>Status/Approve</th>
                             <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', color: '#475569', borderBottom: '2px solid #E2E8F0', width: '120px' }}>Actions</th>
                             <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', color: '#059669', borderBottom: '2px solid #E2E8F0', backgroundColor: '#F0FDF4', width: '80px' }}>Mailed?</th>
+                            <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', color: '#059669', borderBottom: '2px solid #E2E8F0', backgroundColor: '#F0FDF4', width: '90px' }}>Mail Date</th>
+                            <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', color: '#7C3AED', borderBottom: '2px solid #E2E8F0', backgroundColor: '#FAF5FF', width: '100px' }}>Receipt</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1854,65 +2205,72 @@ ${generateInvoiceHtml(row)}
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
-                                <td style={{ padding: '12px 14px', backgroundColor: '#EFF6FF' }}>
-                                  {row.invoiceNo ? <span style={{ fontWeight: '700', fontSize: '11px', color: row.invoiceType === 'Combined' ? '#7C3AED' : '#1E40AF' }}>{row.invoiceNo}</span> : <span style={{ color: '#CBD5E1' }}>-</span>}
+                                <td style={{ padding: '10px 14px', backgroundColor: '#EFF6FF' }}>
+                                  {row.invoiceNo ? <span style={{ fontWeight: '700', color: '#1E40AF', fontSize: '12px' }}>{row.invoiceNo}</span> : <span style={{ color: '#CBD5E1' }}>-</span>}
+                                </td>
+                                <td style={{ padding: '10px 14px', backgroundColor: '#EFF6FF', fontSize: '12px' }}>{row.invoiceDate ? formatDate(row.invoiceDate) : '-'}</td>
+                                <td style={{ padding: '10px 14px', backgroundColor: '#EFF6FF', textAlign: 'right', fontWeight: '700', color: '#1E40AF', fontSize: '13px' }}>{row.invoiceTotalAmount ? formatCurrencyShort(row.invoiceTotalAmount) : '-'}</td>
+                                <td style={{ padding: '10px 14px', textAlign: 'center', backgroundColor: '#FAF5FF' }}>
+                                  {row.combinationCode && row.combinationCode !== 'NA' ? <span style={{ fontWeight: '700', color: '#7C3AED', fontSize: '12px' }}>{row.combinationCode}</span> : '-'}
                                 </td>
                                 
-                                <td style={{ padding: '12px 14px', backgroundColor: '#EFF6FF' }}>
-                                  {row.invoiceDate ? <span style={{ fontSize: '12px' }}>{formatDate(row.invoiceDate)}</span> : <span style={{ color: '#CBD5E1' }}>-</span>}
-                                </td>
-                                
-                                <td style={{ padding: '12px 14px', textAlign: 'right', backgroundColor: '#EFF6FF' }}>
-                                  {row.invoiceTotalAmount ? <span style={{ fontWeight: '700', fontSize: '12px', color: '#059669' }}>{formatCurrencyShort(row.invoiceTotalAmount)}</span> : <span style={{ color: '#CBD5E1' }}>-</span>}
-                                </td>
-                                
-                                <td style={{ padding: '12px 14px', textAlign: 'center', backgroundColor: '#FAF5FF' }}>
-                                  {row.combinationCode && row.combinationCode !== 'NA' ? (
-                                    <span style={{ padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '700', backgroundColor: '#F3E8FF', color: '#7C3AED', border: '1px solid #DDD6FE' }}>C{row.combinationCode}</span>
+                                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
+                                  {row.invoiceGenerated ? (
+                                    <button onClick={() => openApprovalModal(row)} style={{ padding: '5px 10px', fontSize: '11px', fontWeight: isDirector ? '700' : '500', border: '1.5px solid', borderRadius: '6px', cursor: 'pointer', backgroundColor: row.invoiceStatus === 'Approved' ? '#DCFCE7' : (row.invoiceStatus === 'Need Edits' ? '#FEE2E2' : '#FEF3C7'), borderColor: row.invoiceStatus === 'Approved' ? '#22C55E' : (row.invoiceStatus === 'Need Edits' ? '#DC2626' : '#F59E0B'), color: row.invoiceStatus === 'Approved' ? '#166534' : (row.invoiceStatus === 'Need Edits' ? '#991B1B' : '#92400E') }}>
+                                      {isDirector ? (row.invoiceStatus === 'Approved' ? '✅ Approve' : '✏️ Review & Approve') : 'View Details'}
+                                    </button>
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
-                                {/* Status/Approve Column */}
                                 <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                                  {row.invoiceGenerated ? (
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-                                      <StatusBadge status={row.invoiceStatus} small />
-                                      {(row.invoiceStatus === 'Created' || row.invoiceStatus === 'Need Edits') && (
-                                        <button onClick={() => openApprovalModal(row)} style={{ fontSize: '10px', color: isDirector ? '#059669' : '#2874A6', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', fontWeight: isDirector ? '600' : '400' }}>
-                                          {isDirector ? (row.invoiceStatus === 'Need Edits' ? '✏️ Review & Approve' : '✅ Approve') : 'View Details'}
-                                        </button>
-                                      )}
-                                      {row.editComments && (
-                                        <div title={row.editComments} style={{ fontSize: '10px', color: '#DC2626', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                          💬 {row.editComments}
-                                        </div>
-                                      )}
+                                  {row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
+                                    <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
+                                      <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
+                                      {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
-                                  ) : <span style={{ color: '#CBD5E1' }}>-</span>}
-                                </td>
-                                
-                                {/* Actions Column */}
-                                <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                                  {row.invoiceGenerated ? (
-                                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                                      <ActionButton icon={Eye} small variant="brand" label="View" onClick={() => downloadInvoice(row)} />
-                                      {/* Email - Finance only */}
-                                      {canEdit && <ActionButton icon={Mail} small variant="success" disabled={mailDisabled || row.invoiceStatus === 'Need Edits'} onClick={() => { setSelectedRow(row); setShowEmailModal(true); }} />}
-                                      {/* Delete - Finance only */}
-                                      {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} />}
-                                    </div>
+                                  ) : row.invoiceGenerated ? (
+                                    <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
                                 <td style={{ padding: '10px 14px', textAlign: 'center', backgroundColor: '#F0FDF4' }}>
-                                  {row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
-                                    <select value={row.mailingSent || 'No'} onChange={(e) => updateMailingStatus(row.id, e.target.value)} disabled={mailDisabled || isDirector}
-                                      style={{ padding: '6px 8px', fontSize: '12px', fontWeight: '600', border: '2px solid', borderRadius: '6px', borderColor: row.mailingSent === 'Yes' ? '#22C55E' : '#E2E8F0', backgroundColor: row.mailingSent === 'Yes' ? '#DCFCE7' : '#FFFFFF', color: row.mailingSent === 'Yes' ? '#166534' : '#64748B', cursor: (mailDisabled || isDirector) ? 'not-allowed' : 'pointer', width: '60px', opacity: (mailDisabled || isDirector) ? 0.5 : 1 }}>
-                                      <option value="No">No</option>
-                                      <option value="Yes">Yes</option>
-                                    </select>
-                                  ) : row.invoiceGenerated ? (
+                                  {row.invoiceGenerated && row.invoiceStatus === 'Approved' && canEdit ? (
+                                    mailDisabled ? <span style={{ fontSize: '10px', color: '#94A3B8' }}>Combined sent</span> : (
+                                      <select value={row.mailingSent || 'No'} onChange={(e) => updateRowField(row.id, 'mailingSent', e.target.value)}
+                                        style={{ padding: '5px 8px', fontSize: '11px', fontWeight: '700', border: '2px solid', borderRadius: '6px', borderColor: row.mailingSent === 'Yes' ? '#22C55E' : '#E2E8F0', backgroundColor: row.mailingSent === 'Yes' ? '#DCFCE7' : '#FFFFFF', color: row.mailingSent === 'Yes' ? '#166534' : '#64748B', cursor: 'pointer', width: '60px' }}>
+                                        <option value="No">No</option>
+                                        <option value="Yes">Yes</option>
+                                      </select>
+                                    )
+                                  ) : row.invoiceGenerated && row.invoiceStatus === 'Approved' && isDirector ? (
+                                    <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600', backgroundColor: row.mailingSent === 'Yes' ? '#DCFCE7' : '#FEF3C7', color: row.mailingSent === 'Yes' ? '#166534' : '#92400E' }}>{row.mailingSent === 'Yes' ? '✅ Yes' : '⏳ No'}</span>
+                                  ) : row.invoiceGenerated && row.invoiceStatus !== 'Approved' ? (
                                     <span style={{ fontSize: '10px', color: '#94A3B8' }}>Approve first</span>
+                                  ) : <span style={{ color: '#CBD5E1' }}>-</span>}
+                                </td>
+                                
+                                {/* Mail Date Column */}
+                                <td style={{ padding: '10px 14px', textAlign: 'center', backgroundColor: '#F0FDF4' }}>
+                                  {row.mailingSent === 'Yes' ? (
+                                    canEdit ? (
+                                      <input
+                                        type="date"
+                                        value={row.mailDate || row.invoiceDate || ''}
+                                        onChange={(e) => updateRowField(row.id, 'mailDate', e.target.value)}
+                                        style={{ padding: '4px 6px', fontSize: '11px', border: '1.5px solid #D1D5DB', borderRadius: '6px', width: '100%' }}
+                                      />
+                                    ) : (
+                                      <span style={{ fontSize: '11px' }}>{formatDate(row.mailDate || row.invoiceDate)}</span>
+                                    )
+                                  ) : <span style={{ color: '#CBD5E1' }}>-</span>}
+                                </td>
+                                
+                                {/* Receipt Status Column */}
+                                <td style={{ padding: '10px 14px', textAlign: 'center', backgroundColor: '#FAF5FF' }}>
+                                  {row.receiptStatus === 'Received' ? (
+                                    <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '700', backgroundColor: '#DCFCE7', color: '#166534' }}>✅ {row.receiptNo || 'Received'}</span>
+                                  ) : row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
+                                    <span style={{ padding: '4px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: '600', backgroundColor: '#FEF3C7', color: '#92400E' }}>⏳ Pending</span>
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                               </tr>
@@ -1928,16 +2286,17 @@ ${generateInvoiceHtml(row)}
           </div>
         )}
 
-        {masterData.length > 0 && (
+        {currentTabData.length > 0 && (
           <div style={{ marginTop: '16px', padding: '16px 20px', backgroundColor: '#FFFFFF', borderRadius: '12px', border: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', gap: '24px', fontSize: '14px', color: '#475569' }}>
-              <span>📊 Total: <strong>{filteredData.length}</strong></span>
-              <span>✅ To Bill: <strong>{filteredData.filter(r => r.toBeBilled === 'Yes').length}</strong></span>
-              <span>🧾 Invoiced: <strong>{filteredData.filter(r => r.invoiceGenerated).length}</strong></span>
-              <span>✅ Approved: <strong>{filteredData.filter(r => r.invoiceStatus === 'Approved').length}</strong></span>
+              <span>📊 Total: <strong>{filteredTabData.length}</strong></span>
+              <span>✅ To Bill: <strong>{filteredTabData.filter(r => r.toBeBilled === 'Yes').length}</strong></span>
+              <span>🧾 Invoiced: <strong>{filteredTabData.filter(r => r.invoiceGenerated).length}</strong></span>
+              <span>✅ Approved: <strong>{filteredTabData.filter(r => r.invoiceStatus === 'Approved').length}</strong></span>
+              {masterSheetTab === 'closed' && <span>💰 Received: <strong>{filteredTabData.filter(r => r.receiptStatus === 'Received').length}</strong></span>}
             </div>
             <div style={{ fontSize: '18px', fontWeight: '700', color: '#059669' }}>
-              Total: {formatCurrency(filteredData.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || 0), 0))}
+              Total: {formatCurrency(filteredTabData.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || 0), 0))}
             </div>
           </div>
         )}
@@ -1960,6 +2319,7 @@ ${generateInvoiceHtml(row)}
           invoiceType: row.invoiceType, 
           combinationCode: row.combinationCode, 
           invoiceStatus: row.invoiceStatus, 
+          mailingSent: row.mailingSent,
           receiptStatus: row.receiptStatus || 'Pending',
           receiptNo: row.receiptNo,
           campaigns: [row], 
@@ -1969,7 +2329,47 @@ ${generateInvoiceHtml(row)}
         invoiceMap.get(row.invoiceNo).campaigns.push(row);
       }
     });
-    const invoices = Array.from(invoiceMap.values());
+    
+    // Apply filters
+    let invoices = Array.from(invoiceMap.values());
+    if (invoiceFilters.party) {
+      invoices = invoices.filter(inv => inv.partyName === invoiceFilters.party);
+    }
+    if (invoiceFilters.invoiceStatus) {
+      invoices = invoices.filter(inv => inv.invoiceStatus === invoiceFilters.invoiceStatus);
+    }
+    if (invoiceFilters.receiptStatus) {
+      if (invoiceFilters.receiptStatus === 'Received') {
+        invoices = invoices.filter(inv => inv.receiptStatus === 'Received');
+      } else if (invoiceFilters.receiptStatus === 'Pending') {
+        invoices = invoices.filter(inv => inv.receiptStatus !== 'Received');
+      }
+    }
+    if (invoiceFilters.invoiceType) {
+      invoices = invoices.filter(inv => inv.invoiceType === invoiceFilters.invoiceType);
+    }
+    if (invoiceFilters.searchText) {
+      const search = invoiceFilters.searchText.toLowerCase();
+      invoices = invoices.filter(inv => 
+        inv.invoiceNo?.toLowerCase().includes(search) ||
+        inv.partyName?.toLowerCase().includes(search)
+      );
+    }
+
+    // Group invoices by party for client-wise display
+    const invoicesByParty = {};
+    invoices.forEach(inv => {
+      if (!invoicesByParty[inv.partyName]) {
+        invoicesByParty[inv.partyName] = [];
+      }
+      invoicesByParty[inv.partyName].push(inv);
+    });
+    
+    // Sort parties alphabetically
+    const sortedParties = Object.keys(invoicesByParty).sort();
+
+    const hasInvoiceFilters = invoiceFilters.party || invoiceFilters.invoiceStatus || invoiceFilters.receiptStatus || invoiceFilters.invoiceType || invoiceFilters.searchText;
+    const allInvoices = Array.from(invoiceMap.values());
 
     return (
       <div>
@@ -1977,13 +2377,72 @@ ${generateInvoiceHtml(row)}
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>🧾 Invoice & Receipt Register</h1>
           {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
         </div>
+        
+        {/* Filters */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '14px 18px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Filter size={18} color="#64748B" />
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Filters:</span>
+            </div>
+            
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+              <input 
+                type="text" 
+                placeholder="Search invoice..." 
+                value={invoiceFilters.searchText} 
+                onChange={(e) => setInvoiceFilters(prev => ({ ...prev, searchText: e.target.value }))}
+                style={{ padding: '8px 12px 8px 32px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', width: '160px' }}
+              />
+            </div>
+            
+            <select value={invoiceFilters.party} onChange={(e) => setInvoiceFilters(prev => ({ ...prev, party: e.target.value }))}
+              style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', backgroundColor: '#FFFFFF' }}>
+              <option value="">All Parties</option>
+              {parties.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            
+            <select value={invoiceFilters.invoiceStatus} onChange={(e) => setInvoiceFilters(prev => ({ ...prev, invoiceStatus: e.target.value }))}
+              style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', backgroundColor: '#FFFFFF' }}>
+              <option value="">All Status</option>
+              <option value="Created">Created</option>
+              <option value="Approved">Approved</option>
+              <option value="Need Edits">Need Edits</option>
+            </select>
+            
+            <select value={invoiceFilters.receiptStatus} onChange={(e) => setInvoiceFilters(prev => ({ ...prev, receiptStatus: e.target.value }))}
+              style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', backgroundColor: '#FFFFFF' }}>
+              <option value="">All Receipts</option>
+              <option value="Received">Received</option>
+              <option value="Pending">Pending</option>
+            </select>
+            
+            <select value={invoiceFilters.invoiceType} onChange={(e) => setInvoiceFilters(prev => ({ ...prev, invoiceType: e.target.value }))}
+              style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', backgroundColor: '#FFFFFF' }}>
+              <option value="">All Types</option>
+              <option value="Individual">Individual</option>
+              <option value="Combined">Combined</option>
+            </select>
+            
+            {hasInvoiceFilters && (
+              <>
+                <button onClick={() => setInvoiceFilters({ party: '', invoiceStatus: '', receiptStatus: '', invoiceType: '', searchText: '' })} 
+                  style={{ padding: '8px 12px', fontSize: '13px', fontWeight: '600', border: '1.5px solid #FCA5A5', borderRadius: '8px', backgroundColor: '#FEE2E2', color: '#991B1B', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <X size={14} /> Clear
+                </button>
+                <span style={{ fontSize: '13px', color: '#64748B' }}>Showing {invoices.length} of {allInvoices.length}</span>
+              </>
+            )}
+          </div>
+        </div>
+        
         <Card noPadding>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead>
               <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700' }}>Invoice No</th>
                 <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700' }}>Date</th>
-                <th style={{ padding: '12px 14px', textAlign: 'left', fontWeight: '700' }}>Party</th>
                 <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700' }}>Type</th>
                 <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700' }}>Campaigns</th>
                 <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700' }}>Amount</th>
@@ -1993,48 +2452,70 @@ ${generateInvoiceHtml(row)}
               </tr>
             </thead>
             <tbody>
-              {invoices.length === 0 ? (
-                <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No invoices generated yet</td></tr>
+              {sortedParties.length === 0 ? (
+                <tr><td colSpan="8" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>{hasInvoiceFilters ? 'No matching invoices' : 'No invoices generated yet'}</td></tr>
               ) : (
-                invoices.map(inv => (
-                  <tr key={inv.invoiceNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: inv.invoiceType === 'Combined' ? '#FAF5FF' : 'transparent' }}>
-                    <td style={{ padding: '12px 14px', fontWeight: '700', color: inv.invoiceType === 'Combined' ? '#7C3AED' : '#2874A6' }}>{inv.invoiceNo}</td>
-                    <td style={{ padding: '12px 14px' }}>{formatDate(inv.date)}</td>
-                    <td style={{ padding: '12px 14px' }}>{inv.partyName}</td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}><StatusBadge status={inv.invoiceType} small /></td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}><span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600', backgroundColor: '#E0E7FF', color: '#3730A3' }}>{inv.campaigns.length}</span></td>
-                    <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', fontSize: '14px' }}>{formatCurrency(inv.totalAmount)}</td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}><StatusBadge status={inv.invoiceStatus} small /></td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      {inv.receiptStatus === 'Received' ? (
-                        <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '700', backgroundColor: '#DCFCE7', color: '#166534' }}>✅ {inv.receiptNo || 'Received'}</span>
-                      ) : (
-                        <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '600', backgroundColor: '#FEF3C7', color: '#92400E' }}>⏳ Pending</span>
-                      )}
-                    </td>
-                    <td style={{ padding: '12px 14px', textAlign: 'center' }}>
-                      <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                        {/* View Invoice */}
-                        <ActionButton icon={Eye} small variant="brand" onClick={() => downloadInvoice(inv.campaigns[0])} title="View Invoice" />
-                        
-                        {/* Receipt - only for finance, approved invoices, not yet received */}
-                        {canEdit && inv.invoiceStatus === 'Approved' && inv.receiptStatus !== 'Received' && (
-                          <ActionButton icon={Receipt} small variant="success" onClick={() => openReceiptModal(inv.campaigns[0])} title="Create Receipt" />
-                        )}
-                        
-                        {/* Credit Note - only for finance */}
-                        {canEdit && inv.invoiceStatus === 'Approved' && (
-                          <ActionButton icon={FileText} small variant="primary" onClick={() => openCreditNoteModal(inv.campaigns[0])} title="Credit Note" />
-                        )}
-                        
-                        {/* Delete - only for finance */}
-                        {canEdit && (
-                          <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(inv.campaigns[0])} title="Delete" />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                sortedParties.map(party => {
+                  const partyInvoices = invoicesByParty[party];
+                  const partyTotal = partyInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+                  const isExpanded = expandedParties.has(party);
+                  
+                  return (
+                    <React.Fragment key={party}>
+                      {/* Party Header Row */}
+                      <tr 
+                        onClick={() => togglePartyExpand(party)}
+                        style={{ backgroundColor: '#1E3A5F', color: 'white', cursor: 'pointer', borderBottom: '1px solid #0F2744' }}
+                      >
+                        <td colSpan="4" style={{ padding: '12px 14px', fontWeight: '700', fontSize: '14px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                            <Users size={16} />
+                            {party}
+                            <span style={{ backgroundColor: '#2874A6', padding: '2px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600' }}>
+                              {partyInvoices.length} invoice{partyInvoices.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', fontSize: '14px' }}>{formatCurrency(partyTotal)}</td>
+                        <td colSpan="3" style={{ padding: '12px 14px' }}></td>
+                      </tr>
+                      
+                      {/* Invoice Rows */}
+                      {isExpanded && partyInvoices.map(inv => (
+                        <tr key={inv.invoiceNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: inv.invoiceType === 'Combined' ? '#FAF5FF' : 'transparent' }}>
+                          <td style={{ padding: '12px 14px 12px 40px', fontWeight: '700', color: inv.invoiceType === 'Combined' ? '#7C3AED' : '#2874A6' }}>{inv.invoiceNo}</td>
+                          <td style={{ padding: '12px 14px' }}>{formatDate(inv.date)}</td>
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}><StatusBadge status={inv.invoiceType} small /></td>
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}><span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '12px', fontWeight: '600', backgroundColor: '#E0E7FF', color: '#3730A3' }}>{inv.campaigns.length}</span></td>
+                          <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', fontSize: '14px' }}>{formatCurrency(inv.totalAmount)}</td>
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}><StatusBadge status={inv.invoiceStatus} small /></td>
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            {inv.receiptStatus === 'Received' ? (
+                              <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '700', backgroundColor: '#DCFCE7', color: '#166534' }}>✅ {inv.receiptNo || 'Received'}</span>
+                            ) : (
+                              <span style={{ padding: '4px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '600', backgroundColor: '#FEF3C7', color: '#92400E' }}>⏳ Pending</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                              <ActionButton icon={Eye} small variant="brand" onClick={() => downloadInvoice(inv.campaigns[0])} title="View Invoice" />
+                              {canEdit && inv.invoiceStatus === 'Approved' && inv.mailingSent === 'Yes' && inv.receiptStatus !== 'Received' && (
+                                <ActionButton icon={Receipt} small variant="success" onClick={() => openReceiptModal(inv.campaigns[0])} title="Create Receipt" />
+                              )}
+                              {canEdit && inv.invoiceStatus === 'Approved' && (
+                                <ActionButton icon={FileText} small variant="primary" onClick={() => openCreditNoteModal(inv.campaigns[0])} title="Credit Note" />
+                              )}
+                              {canEdit && (
+                                <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(inv.campaigns[0])} title="Delete" />
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -2043,12 +2524,145 @@ ${generateInvoiceHtml(row)}
     );
   };
 
+  // Generate Ledger PDF
+  const generateLedgerPDF = () => {
+    if (!selectedParty) {
+      alert('Please select a party first');
+      return;
+    }
+    
+    const filteredLedger = partyLedger.filter(entry => {
+      if (entry.isOpening) return true;
+      const entryDate = new Date(entry.date);
+      const fromDate = new Date(ledgerPeriod.fromDate);
+      const toDate = new Date(ledgerPeriod.toDate);
+      return entryDate >= fromDate && entryDate <= toDate;
+    });
+    
+    const closingBalance = filteredLedger.length > 0 ? filteredLedger[filteredLedger.length - 1].balance : 0;
+    
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Ledger Statement - ${selectedParty}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 12px; padding: 30px; }
+    .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #2874A6; padding-bottom: 20px; }
+    .firm-name { font-size: 22px; font-weight: bold; color: #1E293B; margin-bottom: 5px; }
+    .firm-address { font-size: 11px; color: #64748B; }
+    .statement-title { font-size: 16px; font-weight: bold; margin-top: 15px; color: #2874A6; }
+    .party-details { background-color: #F8FAFC; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .party-name { font-size: 16px; font-weight: bold; color: #1E293B; margin-bottom: 5px; }
+    .period { font-size: 12px; color: #64748B; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th { background-color: #2874A6; color: white; padding: 10px 8px; text-align: left; font-size: 11px; }
+    th:nth-child(4), th:nth-child(5), th:nth-child(6) { text-align: right; }
+    td { padding: 8px; border-bottom: 1px solid #E2E8F0; font-size: 11px; }
+    td:nth-child(4), td:nth-child(5), td:nth-child(6) { text-align: right; }
+    .opening-row { background-color: #FEF3C7; font-weight: bold; }
+    .credit-row { color: #059669; }
+    .debit-row { color: #DC2626; }
+    .footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #E2E8F0; }
+    .closing-balance { font-size: 14px; font-weight: bold; text-align: right; }
+    .dr { color: #DC2626; }
+    .cr { color: #059669; }
+    @media print { body { padding: 15px; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="firm-name">${companyConfig.name}</div>
+    <div class="firm-address">${companyConfig.address}, ${companyConfig.addressLine2}, ${companyConfig.city}</div>
+    <div class="firm-address">GSTIN: ${companyConfig.gstin} | PAN: ${companyConfig.pan}</div>
+    <div class="statement-title">LEDGER STATEMENT</div>
+  </div>
+  
+  <div class="party-details">
+    <div class="party-name">${selectedParty}</div>
+    <div class="period">Period: ${formatDate(ledgerPeriod.fromDate)} to ${formatDate(ledgerPeriod.toDate)}</div>
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 80px;">Date</th>
+        <th>Particulars</th>
+        <th>Narration</th>
+        <th style="width: 90px;">Debit</th>
+        <th style="width: 90px;">Credit</th>
+        <th style="width: 100px;">Balance</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${filteredLedger.map(entry => `
+        <tr class="${entry.isOpening ? 'opening-row' : (entry.credit > 0 ? 'credit-row' : '')}">
+          <td>${entry.isOpening ? '-' : formatDate(entry.date)}</td>
+          <td>${entry.particulars}</td>
+          <td>${entry.narration || '-'}</td>
+          <td>${entry.debit > 0 ? formatCurrencyShort(entry.debit) : '-'}</td>
+          <td>${entry.credit > 0 ? formatCurrencyShort(entry.credit) : '-'}</td>
+          <td class="${entry.balance > 0 ? 'dr' : 'cr'}">${entry.balance > 0 ? 'Dr.' : 'Cr.'} ${formatCurrencyShort(Math.abs(entry.balance))}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+  
+  <div class="footer">
+    <div class="closing-balance">
+      Closing Balance: <span class="${closingBalance > 0 ? 'dr' : 'cr'}">${closingBalance > 0 ? 'Dr.' : 'Cr.'} ${formatCurrency(Math.abs(closingBalance))}</span>
+    </div>
+  </div>
+  
+  <script>window.onload = function() { window.print(); }</script>
+</body>
+</html>`;
+    
+    const printWindow = window.open('', '_blank');
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
   const renderLedgers = () => {
     const getPartyBalance = (party) => {
       const opening = openingBalances[party] || 0;
       const ledgerBal = ledgerEntries.filter(e => e.partyName === party).reduce((sum, e) => sum + e.debit - e.credit, 0);
       return opening + ledgerBal;
     };
+    
+    // Filter parties by search
+    const filteredParties = parties.filter(party => 
+      party.toLowerCase().includes(ledgerPartySearch.toLowerCase())
+    );
+    
+    // Filter ledger entries by period
+    const filteredPartyLedger = selectedParty ? (() => {
+      const opening = openingBalances[selectedParty] || 0;
+      const entries = ledgerEntries
+        .filter(e => e.partyName === selectedParty)
+        .filter(e => {
+          const entryDate = new Date(e.date);
+          const fromDate = new Date(ledgerPeriod.fromDate);
+          const toDate = new Date(ledgerPeriod.toDate);
+          return entryDate >= fromDate && entryDate <= toDate;
+        })
+        .sort((a, b) => new Date(a.date) - new Date(b.date));
+      
+      let balance = opening;
+      const result = [];
+      
+      if (opening !== 0) {
+        result.push({ id: 'opening', date: '', particulars: 'Opening Balance', narration: '', debit: opening > 0 ? opening : 0, credit: opening < 0 ? Math.abs(opening) : 0, balance: opening, isOpening: true });
+      }
+      
+      entries.forEach(entry => {
+        balance += entry.debit - entry.credit;
+        result.push({ ...entry, balance });
+      });
+      
+      return result;
+    })() : [];
 
     return (
       <div>
@@ -2059,11 +2673,55 @@ ${generateInvoiceHtml(row)}
             {canEdit && <ActionButton icon={Plus} label="Opening Balance" variant="primary" onClick={() => setShowOpeningBalanceModal(true)} />}
           </div>
         </div>
+        
+        {/* Period Selector and Download */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '14px 18px', marginBottom: '16px', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Calendar size={18} color="#64748B" />
+              <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Period:</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input 
+                type="date" 
+                value={ledgerPeriod.fromDate} 
+                onChange={(e) => setLedgerPeriod(prev => ({ ...prev, fromDate: e.target.value }))}
+                style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
+              />
+              <span style={{ color: '#64748B' }}>to</span>
+              <input 
+                type="date" 
+                value={ledgerPeriod.toDate} 
+                onChange={(e) => setLedgerPeriod(prev => ({ ...prev, toDate: e.target.value }))}
+                style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
+              />
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
+              {selectedParty && (
+                <ActionButton icon={Download} label="Download PDF" variant="brand" onClick={generateLedgerPDF} />
+              )}
+            </div>
+          </div>
+        </div>
+        
         <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: '16px' }}>
           <Card title="Parties" noPadding>
-            <div style={{ maxHeight: '500px', overflowY: 'auto' }}>
-              {parties.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>No parties yet</div> : (
-                parties.map(party => {
+            {/* Party Search */}
+            <div style={{ padding: '12px', borderBottom: '1px solid #E2E8F0' }}>
+              <div style={{ position: 'relative' }}>
+                <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: '#94A3B8' }} />
+                <input 
+                  type="text" 
+                  placeholder="Search party..." 
+                  value={ledgerPartySearch} 
+                  onChange={(e) => setLedgerPartySearch(e.target.value)}
+                  style={{ width: '100%', padding: '8px 12px 8px 32px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+            <div style={{ maxHeight: '450px', overflowY: 'auto' }}>
+              {filteredParties.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>{ledgerPartySearch ? 'No matching parties' : 'No parties yet'}</div> : (
+                filteredParties.map(party => {
                   const balance = getPartyBalance(party);
                   return (
                     <div key={party} onClick={() => setSelectedParty(party)} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: selectedParty === party ? '#EFF6FF' : 'transparent', borderLeft: selectedParty === party ? '4px solid #2874A6' : '4px solid transparent' }}>
@@ -2075,8 +2733,8 @@ ${generateInvoiceHtml(row)}
               )}
             </div>
           </Card>
-          <Card title={selectedParty || 'Select a Party'} noPadding>
-            {partyLedger.length > 0 ? (
+          <Card title={selectedParty ? `${selectedParty} - Statement` : 'Select a Party'} noPadding>
+            {filteredPartyLedger.length > 0 ? (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#F8FAFC' }}>
@@ -2086,10 +2744,11 @@ ${generateInvoiceHtml(row)}
                     <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '100px' }}>Debit</th>
                     <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '100px' }}>Credit</th>
                     <th style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', width: '120px' }}>Balance</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'center', fontWeight: '700', width: '60px' }}>View</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {partyLedger.map(entry => (
+                  {filteredPartyLedger.map(entry => (
                     <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.type === 'receipt' ? '#F0FDF4' : (entry.type === 'creditnote' ? '#FEF2F2' : 'transparent')) }}>
                       <td style={{ padding: '12px 14px' }}>{entry.isOpening ? '-' : formatDate(entry.date)}</td>
                       <td style={{ padding: '12px 14px', fontWeight: entry.isOpening ? '600' : '500' }}>{entry.particulars}</td>
@@ -2097,11 +2756,29 @@ ${generateInvoiceHtml(row)}
                       <td style={{ padding: '12px 14px', textAlign: 'right', color: '#DC2626', fontWeight: '600' }}>{entry.debit > 0 ? formatCurrency(entry.debit) : '-'}</td>
                       <td style={{ padding: '12px 14px', textAlign: 'right', color: '#059669', fontWeight: '600' }}>{entry.credit > 0 ? formatCurrency(entry.credit) : '-'}</td>
                       <td style={{ padding: '12px 14px', textAlign: 'right', fontWeight: '700', color: entry.balance > 0 ? '#DC2626' : '#059669' }}>{entry.balance > 0 ? 'Dr. ' : 'Cr. '}{formatCurrency(Math.abs(entry.balance))}</td>
+                      <td style={{ padding: '12px 14px', textAlign: 'center' }}>
+                        {entry.type === 'receipt' && entry.paymentAdvisory && (
+                          <button 
+                            onClick={() => {
+                              const w = window.open('', '_blank');
+                              w.document.write(`<html><head><title>Payment Advisory - ${entry.receiptNo}</title></head><body style="margin:0;padding:20px;background:#f5f5f5;"><img src="${entry.paymentAdvisory}" style="max-width:100%;height:auto;border:1px solid #ddd;"/><br/><button onclick="window.print()" style="margin-top:20px;padding:10px 20px;cursor:pointer;">Print</button></body></html>`);
+                              w.document.close();
+                            }}
+                            style={{ padding: '4px 8px', fontSize: '11px', border: '1px solid #2874A6', borderRadius: '4px', backgroundColor: '#EFF6FF', color: '#2874A6', cursor: 'pointer', fontWeight: '600' }}
+                            title="View Payment Advisory"
+                          >
+                            📎
+                          </button>
+                        )}
+                        {entry.type === 'receipt' && !entry.paymentAdvisory && (
+                          <span style={{ color: '#94A3B8', fontSize: '11px' }}>-</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            ) : <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>{selectedParty ? 'No entries' : 'Select a party'}</div>}
+            ) : <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>{selectedParty ? 'No entries in selected period' : 'Select a party to view ledger'}</div>}
           </Card>
         </div>
       </div>
@@ -2153,6 +2830,98 @@ ${generateInvoiceHtml(row)}
             </div>
           )}
         </Card>
+        
+        {/* WhatsApp Notification Settings */}
+        <Card title="📱 WhatsApp Notifications">
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={whatsappSettings.enabled}
+                onChange={(e) => setWhatsappSettings(prev => ({ ...prev, enabled: e.target.checked }))}
+                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+              />
+              <span style={{ fontSize: '14px', fontWeight: '600', color: '#1E293B' }}>Enable WhatsApp Notifications</span>
+            </label>
+          </div>
+          
+          {whatsappSettings.enabled && (
+            <>
+              <div style={{ padding: '12px', backgroundColor: '#DCFCE7', borderRadius: '8px', marginBottom: '16px', fontSize: '12px', color: '#166534', border: '1px solid #86EFAC' }}>
+                <strong>✅ FREE Setup using CallMeBot:</strong><br />
+                1. Save this number in contacts: <strong>+34 644 71 81 99</strong><br />
+                2. Send this message to the number on WhatsApp: <strong>"I allow callmebot to send me messages"</strong><br />
+                3. You'll receive an API key - enter it below<br />
+                4. Repeat for each phone number you want to receive notifications
+              </div>
+              
+              <div style={{ padding: '14px', backgroundColor: '#F8FAFC', borderRadius: '8px', marginBottom: '12px', border: '1px solid #E2E8F0' }}>
+                <div style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Phone size={16} /> Finance Team
+                </div>
+                <InputField 
+                  label="Phone (with country code)" 
+                  value={whatsappSettings.financePhone} 
+                  onChange={(e) => setWhatsappSettings(prev => ({ ...prev, financePhone: e.target.value }))} 
+                  placeholder="919876543210"
+                  small 
+                />
+                <InputField 
+                  label="API Key (from CallMeBot)" 
+                  value={whatsappSettings.financeApiKey} 
+                  onChange={(e) => setWhatsappSettings(prev => ({ ...prev, financeApiKey: e.target.value }))} 
+                  placeholder="123456"
+                  small 
+                />
+                {whatsappSettings.financePhone && whatsappSettings.financeApiKey && (
+                  <ActionButton 
+                    icon={Send} 
+                    label="Test Finance" 
+                    variant="success" 
+                    small 
+                    onClick={() => testWhatsAppNotification(whatsappSettings.financePhone, whatsappSettings.financeApiKey)} 
+                  />
+                )}
+              </div>
+              
+              <div style={{ padding: '14px', backgroundColor: '#F8FAFC', borderRadius: '8px', border: '1px solid #E2E8F0' }}>
+                <div style={{ fontSize: '13px', fontWeight: '700', color: '#1E293B', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Phone size={16} /> Director
+                </div>
+                <InputField 
+                  label="Phone (with country code)" 
+                  value={whatsappSettings.directorPhone} 
+                  onChange={(e) => setWhatsappSettings(prev => ({ ...prev, directorPhone: e.target.value }))} 
+                  placeholder="919876543210"
+                  small 
+                />
+                <InputField 
+                  label="API Key (from CallMeBot)" 
+                  value={whatsappSettings.directorApiKey} 
+                  onChange={(e) => setWhatsappSettings(prev => ({ ...prev, directorApiKey: e.target.value }))} 
+                  placeholder="123456"
+                  small 
+                />
+                {whatsappSettings.directorPhone && whatsappSettings.directorApiKey && (
+                  <ActionButton 
+                    icon={Send} 
+                    label="Test Director" 
+                    variant="success" 
+                    small 
+                    onClick={() => testWhatsAppNotification(whatsappSettings.directorPhone, whatsappSettings.directorApiKey)} 
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {!whatsappSettings.enabled && (
+            <div style={{ padding: '20px', backgroundColor: '#F8FAFC', borderRadius: '8px', textAlign: 'center', color: '#64748B', fontSize: '13px' }}>
+              WhatsApp notifications are disabled. Enable to receive FREE alerts for invoices, approvals, and payments.
+            </div>
+          )}
+        </Card>
+        
         <Card title="💰 Default Invoice Values">
           <input type="file" ref={invoiceValueInputRef} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} onChange={handleInvoiceValueUpload} />
           <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
@@ -2721,6 +3490,98 @@ ${generateInvoiceHtml(row)}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
             <ActionButton label="Cancel" onClick={() => setShowClearDataModal(false)} />
             <ActionButton label="Yes, Clear All Data" variant="danger" icon={Trash2} onClick={clearMasterData} />
+          </div>
+        </div>
+      </Modal>
+
+      {/* Notifications Modal */}
+      <Modal isOpen={showNotificationsModal} onClose={() => setShowNotificationsModal(false)} title="🔔 Notifications" width="550px">
+        <div>
+          {/* Header Actions */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <div style={{ fontSize: '14px', color: '#64748B' }}>
+              {unreadCount > 0 ? `${unreadCount} unread` : 'No unread notifications'}
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {unreadCount > 0 && (
+                <button onClick={markAllNotificationsAsRead} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: '600', border: '1px solid #E2E8F0', borderRadius: '6px', backgroundColor: '#F8FAFC', color: '#475569', cursor: 'pointer' }}>
+                  Mark all as read
+                </button>
+              )}
+              {notifications.length > 0 && canEdit && (
+                <button onClick={clearAllNotifications} style={{ padding: '6px 12px', fontSize: '12px', fontWeight: '600', border: '1px solid #FCA5A5', borderRadius: '6px', backgroundColor: '#FEE2E2', color: '#991B1B', cursor: 'pointer' }}>
+                  Clear all
+                </button>
+              )}
+            </div>
+          </div>
+          
+          {/* Notifications List */}
+          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+            {userNotifications.length === 0 ? (
+              <div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>
+                <Bell size={40} style={{ marginBottom: '12px', opacity: 0.5 }} />
+                <div style={{ fontSize: '16px', fontWeight: '600' }}>No notifications</div>
+                <div style={{ fontSize: '13px', marginTop: '4px' }}>You're all caught up!</div>
+              </div>
+            ) : (
+              userNotifications.map(notification => {
+                const isUnread = !notification.read[userRole];
+                const getTypeIcon = (type) => {
+                  switch (type) {
+                    case 'upload': return '📊';
+                    case 'invoice': return '🧾';
+                    case 'approval': return '✅';
+                    case 'edit': return '✏️';
+                    case 'receipt': return '💰';
+                    default: return '📌';
+                  }
+                };
+                const getTypeBg = (type) => {
+                  switch (type) {
+                    case 'upload': return '#EFF6FF';
+                    case 'invoice': return '#FEF3C7';
+                    case 'approval': return '#DCFCE7';
+                    case 'edit': return '#FEE2E2';
+                    case 'receipt': return '#F0FDF4';
+                    default: return '#F8FAFC';
+                  }
+                };
+                
+                return (
+                  <div 
+                    key={notification.id} 
+                    onClick={() => markNotificationAsRead(notification.id)}
+                    style={{ 
+                      padding: '14px', 
+                      borderRadius: '10px', 
+                      marginBottom: '8px', 
+                      backgroundColor: isUnread ? getTypeBg(notification.type) : '#F8FAFC',
+                      border: isUnread ? '2px solid #2874A6' : '1px solid #E2E8F0',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                      <div style={{ fontSize: '20px' }}>{getTypeIcon(notification.type)}</div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '14px', fontWeight: isUnread ? '600' : '500', color: '#1E293B', lineHeight: '1.4' }}>
+                          {notification.message}
+                        </div>
+                        <div style={{ display: 'flex', gap: '12px', marginTop: '8px', fontSize: '11px', color: '#64748B' }}>
+                          <span>By: {notification.createdBy === 'finance' ? 'Finance Team' : 'Director'}</span>
+                          <span>•</span>
+                          <span>{new Date(notification.createdAt).toLocaleString()}</span>
+                        </div>
+                      </div>
+                      {isUnread && (
+                        <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#DC2626', flexShrink: 0 }} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       </Modal>
