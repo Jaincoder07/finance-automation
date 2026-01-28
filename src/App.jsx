@@ -408,7 +408,7 @@ export default function FinanceApp() {
   });
   
   const [creditNoteForm, setCreditNoteForm] = useState({
-    amount: '', tds: '', discount: '', reason: '', date: new Date().toISOString().split('T')[0]
+    amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0]
   });
   
   const [approvalChecks, setApprovalChecks] = useState({
@@ -1082,16 +1082,26 @@ export default function FinanceApp() {
   };
 
   const handleCreditNoteSubmit = () => {
-    if (!selectedRow || (!creditNoteForm.amount && !creditNoteForm.tds && !creditNoteForm.discount) || !creditNoteForm.reason) {
-      alert('Please enter at least one amount (Amount/TDS/Discount) and reason');
+    if (!selectedRow || (!creditNoteForm.amount && !creditNoteForm.gst) || !creditNoteForm.reason) {
+      alert('Please enter Amount and/or GST and reason');
       return;
     }
     
-    const creditNoteNo = `CN/${new Date().getFullYear()}-${String(new Date().getFullYear() + 1).slice(-2)}/${nextCreditNoteNo}`;
+    // Extract year from invoice number for CN number
+    const invYearMatch = selectedRow.invoiceNo.match(/(\d{4}-\d{2})/);
+    const invYear = invYearMatch ? invYearMatch[1] : `${new Date().getFullYear()}-${String(new Date().getFullYear() + 1).slice(-2)}`;
+    
+    // Extract invoice suffix number
+    const invSuffix = selectedRow.invoiceNo.split('/').pop();
+    const creditNoteNo = `CN/${invYear}/${invSuffix}`;
+    
     const creditAmount = parseFloat(creditNoteForm.amount) || 0;
-    const tdsAmount = parseFloat(creditNoteForm.tds) || 0;
-    const discountAmount = parseFloat(creditNoteForm.discount) || 0;
-    const totalCredit = creditAmount + tdsAmount + discountAmount;
+    const gstAmount = parseFloat(creditNoteForm.gst) || 0;
+    const totalCredit = creditAmount + gstAmount;
+    
+    // Determine GST type based on state
+    const isSameState = selectedRow.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+    const gstType = isSameState ? 'CGST/SGST' : 'IGST';
     
     const newCreditNote = {
       id: Date.now(),
@@ -1100,30 +1110,13 @@ export default function FinanceApp() {
       partyName: selectedRow.partyName,
       date: creditNoteForm.date,
       amount: creditAmount,
-      tds: tdsAmount,
-      discount: discountAmount,
+      gst: gstAmount,
+      gstType: gstType,
       totalAmount: totalCredit,
       reason: creditNoteForm.reason
     };
     
     setCreditNotes(prev => [...prev, newCreditNote]);
-    
-    // Add to ledger with breakdown
-    setLedgerEntries(prev => [...prev, {
-      id: Date.now(),
-      partyName: selectedRow.partyName,
-      date: creditNoteForm.date,
-      particulars: `Credit Note ${creditNoteNo}`,
-      narration: creditNoteForm.reason,
-      debit: 0,
-      credit: totalCredit,
-      creditAmount: creditAmount,
-      tdsAmount: tdsAmount,
-      discountAmount: discountAmount,
-      type: 'creditnote',
-      creditNoteNo,
-      invoiceNo: selectedRow.invoiceNo
-    }]);
     
     // Update masterData to add credit note number
     setMasterData(prev => prev.map(row => 
@@ -1135,12 +1128,11 @@ export default function FinanceApp() {
     setNextCreditNoteNo(prev => prev + 1);
     setShowCreditNoteModal(false);
     setSelectedRow(null);
-    setCreditNoteForm({ amount: '', tds: '', discount: '', reason: '', date: new Date().toISOString().split('T')[0] });
+    setCreditNoteForm({ amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0] });
     
     let alertMsg = `✅ Credit Note Created!\n\nCredit Note No: ${creditNoteNo}`;
-    if (creditAmount > 0) alertMsg += `\nAmount: ${formatCurrency(creditAmount)}`;
-    if (tdsAmount > 0) alertMsg += `\nTDS: ${formatCurrency(tdsAmount)}`;
-    if (discountAmount > 0) alertMsg += `\nDiscount: ${formatCurrency(discountAmount)}`;
+    if (creditAmount > 0) alertMsg += `\nBase Amount: ${formatCurrency(creditAmount)}`;
+    if (gstAmount > 0) alertMsg += `\n${gstType}: ${formatCurrency(gstAmount)}`;
     alertMsg += `\nTotal: ${formatCurrency(totalCredit)}`;
     alert(alertMsg);
   };
@@ -1505,11 +1497,10 @@ export default function FinanceApp() {
     message += `Party: ${cn.partyName}\n`;
     message += `Against Invoice: ${cn.invoiceNo}\n\n`;
     message += `─────────────────────\n`;
-    message += `Amount: ${formatCurrency(cn.amount || 0)}\n`;
-    message += `TDS: ${formatCurrency(cn.tds || 0)}\n`;
-    message += `Discount: ${formatCurrency(cn.discount || 0)}\n`;
+    message += `Base Amount: ${formatCurrency(cn.amount || 0)}\n`;
+    message += `${cn.gstType || 'GST'}: ${formatCurrency(cn.gst || 0)}\n`;
     message += `─────────────────────\n`;
-    message += `Total Credit: ${formatCurrency(cn.totalAmount || ((cn.amount || 0) + (cn.tds || 0) + (cn.discount || 0)))}\n`;
+    message += `Total Credit: ${formatCurrency(cn.totalAmount || ((cn.amount || 0) + (cn.gst || 0)))}\n`;
     if (cn.reason) {
       message += `\nReason: ${cn.reason}`;
     }
@@ -3202,29 +3193,38 @@ ${generateInvoiceHtml(row)}
         }
       });
       
-      // Get historical entries for this party
-      const historicalEntries = ledgerEntries.filter(e => 
-        e.partyName === selectedParty && e.isHistorical
+      // Get historical entries for this party (excluding CN type - they'll be matched separately)
+      const historicalInvoices = ledgerEntries.filter(e => 
+        e.partyName === selectedParty && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+      );
+      
+      // Get historical credit notes
+      const historicalCNs = ledgerEntries.filter(e => 
+        e.partyName === selectedParty && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
       
       // Get receipts for this party
       const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
       
-      // Get all credit notes for this party (both from creditNotes state and ledgerEntries)
-      const allCreditNotes = [
-        ...creditNotes.filter(cn => cn.partyName === selectedParty),
-        ...ledgerEntries.filter(e => 
-          e.partyName === selectedParty && 
-          (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-        )
-      ];
+      // Get credit notes from creditNotes state only (not ledgerEntries to avoid duplicates)
+      const systemCNs = creditNotes.filter(cn => cn.partyName === selectedParty);
       
-      // Create a map of credit notes by invoice suffix
-      const creditNoteByInvoice = new Map();
-      allCreditNotes.forEach(cn => {
-        const suffix = getInvoiceSuffix(cn.vchNo || cn.creditNoteNo || cn.invoiceNo);
-        if (suffix && !creditNoteByInvoice.has(suffix)) {
-          creditNoteByInvoice.set(suffix, cn);
+      // Create a map of ALL credit notes by invoice suffix (combine system + historical)
+      const creditNoteByInvoiceSuffix = new Map();
+      
+      // Add system credit notes
+      systemCNs.forEach(cn => {
+        const suffix = getInvoiceSuffix(cn.creditNoteNo || cn.invoiceNo);
+        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
+          creditNoteByInvoiceSuffix.set(suffix, { ...cn, isSystemCN: true });
+        }
+      });
+      
+      // Add historical credit notes
+      historicalCNs.forEach(cn => {
+        const suffix = getInvoiceSuffix(cn.vchNo);
+        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
+          creditNoteByInvoiceSuffix.set(suffix, { ...cn, isHistoricalCN: true });
         }
       });
       
@@ -3235,7 +3235,7 @@ ${generateInvoiceHtml(row)}
       let totalCredit = 0;
       let totalReceived = 0;
       let totalTds = 0;
-      const processedCNs = new Set();
+      const processedCNSuffixes = new Set();
       
       // Add opening balance if exists
       if (opening !== 0) {
@@ -3259,8 +3259,8 @@ ${generateInvoiceHtml(row)}
         totalCredit += opening < 0 ? Math.abs(opening) : 0;
       }
       
-      // Combine all entries (from masterData and historical) and sort by date
-      const allEntries = [];
+      // Combine all invoice entries and sort by date
+      const allInvoiceEntries = [];
       
       // Add invoices from masterData
       Array.from(invoiceMap.values())
@@ -3271,27 +3271,27 @@ ${generateInvoiceHtml(row)}
           return invDate >= fromDate && invDate <= toDate;
         })
         .forEach(inv => {
-          allEntries.push({ ...inv, entryType: 'invoice', sortDate: inv.invoiceDate });
+          allInvoiceEntries.push({ ...inv, entryType: 'invoice', sortDate: inv.invoiceDate });
         });
       
-      // Add historical entries (excluding credit notes - they'll be added after their invoices)
-      historicalEntries
+      // Add historical invoices
+      historicalInvoices
         .filter(e => {
           if (!e.date) return false;
           const entryDate = new Date(e.date);
           const fromDate = new Date(ledgerPeriod.fromDate);
           const toDate = new Date(ledgerPeriod.toDate);
-          return entryDate >= fromDate && entryDate <= toDate && e.type !== 'creditnote';
+          return entryDate >= fromDate && entryDate <= toDate;
         })
         .forEach(e => {
-          allEntries.push({ ...e, entryType: e.type, sortDate: e.date });
+          allInvoiceEntries.push({ ...e, entryType: e.type || 'invoice', sortDate: e.date });
         });
       
-      // Sort all by date
-      allEntries.sort((a, b) => new Date(a.sortDate) - new Date(b.sortDate));
+      // Sort all invoice entries by date
+      allInvoiceEntries.sort((a, b) => new Date(a.sortDate) - new Date(b.sortDate));
       
-      // Process each entry
-      allEntries.forEach(entry => {
+      // Process each invoice entry and add its CN right after
+      allInvoiceEntries.forEach(entry => {
         if (entry.isFromMaster) {
           // Process invoice from masterData
           const inv = entry;
@@ -3306,9 +3306,9 @@ ${generateInvoiceHtml(row)}
           const igst = isSameState ? 0 : baseAmount * 0.18;
           const totalAmount = baseAmount + cgst + sgst + igst;
           
-          // Check for matching credit note
+          // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(inv.invoiceNo);
-          const matchingCN = creditNoteByInvoice.get(invSuffix);
+          const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
           const hasCN = !!matchingCN;
           
           // Get receipt info for this invoice
@@ -3329,7 +3329,7 @@ ${generateInvoiceHtml(row)}
             subRows.push({ particular: 'IGST', credit: igst });
           }
           
-          // Determine payment status (excluding CN logic - CN shows as separate entry)
+          // Determine payment status
           let paymentStatus = '';
           let amountReceived = 0;
           let tdsReceived = 0;
@@ -3371,34 +3371,31 @@ ${generateInvoiceHtml(row)}
             subRows: subRows
           });
           
-          // Add credit note entry right after invoice if exists
-          if (matchingCN) {
-            processedCNs.add(matchingCN.id || matchingCN.creditNoteNo);
+          // Add credit note entry RIGHT AFTER invoice if exists
+          if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
+            processedCNSuffixes.add(invSuffix);
             const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
             runningBalance -= cnAmount;
             totalCredit += cnAmount;
             
-            // CN sub-rows showing Amount, TDS, Discount breakdown
+            // CN sub-rows
             const cnSubRows = [];
-            if (matchingCN.amount || matchingCN.creditAmount) {
-              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', debit: -(matchingCN.amount || matchingCN.creditAmount || cnAmount / 1.18) });
+            if (matchingCN.amount) {
+              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: matchingCN.amount });
             }
-            if (matchingCN.tds || matchingCN.tdsAmount) {
-              cnSubRows.push({ particular: 'TDS', debit: -(matchingCN.tds || matchingCN.tdsAmount) });
-            }
-            if (matchingCN.discount || matchingCN.discountAmount) {
-              cnSubRows.push({ particular: 'Discount', debit: -(matchingCN.discount || matchingCN.discountAmount) });
+            if (matchingCN.gst) {
+              cnSubRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: matchingCN.gst });
             }
             // If no breakdown, calculate from total
-            if (cnSubRows.length === 0) {
+            if (cnSubRows.length === 0 && cnAmount > 0) {
               const baseAmt = cnAmount / 1.18;
               const taxAmt = cnAmount - baseAmt;
-              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', debit: -baseAmt });
-              cnSubRows.push({ particular: isSameState ? 'CGST + SGST' : 'IGST', debit: -taxAmt });
+              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: baseAmt });
+              cnSubRows.push({ particular: isSameState ? 'CGST + SGST' : 'IGST', credit: taxAmt });
             }
             
             entries.push({
-              id: matchingCN.id || matchingCN.creditNoteNo,
+              id: matchingCN.id || matchingCN.creditNoteNo || `cn-${invSuffix}`,
               date: matchingCN.date,
               particular: selectedParty,
               vchType: 'Credit Note',
@@ -3412,19 +3409,18 @@ ${generateInvoiceHtml(row)}
               paymentStatus: '',
               isCreditNote: true,
               hasCN: true,
-              linkedInvoice: inv.invoiceNo,
-              subRows: matchingCN.isHistorical ? (matchingCN.subRows || []) : cnSubRows
+              subRows: matchingCN.isHistoricalCN ? (matchingCN.subRows || cnSubRows) : cnSubRows
             });
           }
         } else if (entry.isHistorical) {
-          // Process historical entry
+          // Process historical invoice entry
           const debit = entry.debit || 0;
           const credit = entry.credit || 0;
           
-          // Check for matching credit note
+          // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(entry.vchNo);
-          const matchingCN = creditNoteByInvoice.get(invSuffix);
-          const hasCN = !!matchingCN && entry.type === 'invoice';
+          const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+          const hasCN = !!matchingCN;
           
           runningBalance += debit - credit;
           totalDebit += debit;
@@ -3446,23 +3442,23 @@ ${generateInvoiceHtml(row)}
             receiptDate: entry.receiptDate || '',
             amountReceived: entry.amountReceived || 0,
             tdsReceived: entry.tdsReceived || 0,
-            balance: hasCN ? '-' : (entry.balance || 0),
+            balance: hasCN ? '-' : (entry.balance || (debit - (entry.amountReceived || 0) - (entry.tdsReceived || 0))),
             paymentStatus: hasCN ? '' : (entry.paymentStatus || ''),
-            isInvoice: entry.type === 'invoice',
+            isInvoice: true,
             isHistorical: true,
             hasCN: hasCN,
             subRows: subRows
           });
           
-          // Add credit note entry right after historical invoice if exists
-          if (hasCN && matchingCN && !processedCNs.has(matchingCN.id || matchingCN.creditNoteNo)) {
-            processedCNs.add(matchingCN.id || matchingCN.creditNoteNo);
+          // Add credit note entry RIGHT AFTER historical invoice if exists
+          if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
+            processedCNSuffixes.add(invSuffix);
             const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
             runningBalance -= cnAmount;
             totalCredit += cnAmount;
             
             entries.push({
-              id: matchingCN.id || matchingCN.creditNoteNo,
+              id: matchingCN.id || matchingCN.creditNoteNo || matchingCN.vchNo || `cn-${invSuffix}`,
               date: matchingCN.date,
               particular: selectedParty,
               vchType: 'Credit Note',
@@ -3476,67 +3472,10 @@ ${generateInvoiceHtml(row)}
               paymentStatus: '',
               isCreditNote: true,
               hasCN: true,
-              linkedInvoice: entry.vchNo,
               subRows: matchingCN.subRows || []
             });
           }
         }
-      });
-      
-      // Add any remaining credit notes that weren't matched
-      allCreditNotes
-        .filter(cn => {
-          if (!cn.date) return false;
-          const cnId = cn.id || cn.creditNoteNo;
-          if (processedCNs.has(cnId)) return false;
-          const cnDate = new Date(cn.date);
-          const fromDate = new Date(ledgerPeriod.fromDate);
-          const toDate = new Date(ledgerPeriod.toDate);
-          return cnDate >= fromDate && cnDate <= toDate;
-        })
-        .forEach(cn => {
-          const cnAmount = cn.totalAmount || cn.credit || 0;
-          runningBalance -= cnAmount;
-          totalCredit += cnAmount;
-          
-          entries.push({
-            id: cn.id || cn.creditNoteNo,
-            date: cn.date,
-            particular: selectedParty,
-            vchType: 'Credit Note',
-            vchNo: cn.creditNoteNo || cn.vchNo,
-            debit: 0,
-            credit: cnAmount,
-            receiptDate: '',
-            amountReceived: 0,
-            tdsReceived: 0,
-            balance: '-',
-            paymentStatus: '',
-            isCreditNote: true,
-            subRows: cn.subRows || []
-          });
-        });
-      
-      // Sort entries by date, keeping CN right after its invoice
-      entries.sort((a, b) => {
-        if (a.isOpening) return -1;
-        if (b.isOpening) return 1;
-        
-        // If b is a CN linked to a, keep them together
-        if (b.linkedInvoice === a.vchNo) return -1;
-        if (a.linkedInvoice === b.vchNo) return 1;
-        
-        const dateA = new Date(a.date);
-        const dateB = new Date(b.date);
-        if (dateA.getTime() !== dateB.getTime()) {
-          return dateA - dateB;
-        }
-        
-        // Same date - put CN after invoice
-        if (a.isCreditNote && !b.isCreditNote) return 1;
-        if (!a.isCreditNote && b.isCreditNote) return -1;
-        
-        return 0;
       });
       
       return {
@@ -3769,17 +3708,21 @@ ${generateInvoiceHtml(row)}
                               </td>
                             </tr>
                             
-                            {/* Sub Rows for line items */}
-                            {entry.subRows && entry.subRows.map((sub, idx) => (
-                              <tr key={`${entry.id}-sub-${idx}`} style={{ backgroundColor: '#FAFAFA', borderBottom: idx === entry.subRows.length - 1 ? '2px solid #E2E8F0' : '1px solid #F1F5F9' }}>
+                            {/* Sub Rows for line items - same style as parent */}
+                            {entry.subRows && entry.subRows.length > 0 && entry.subRows.map((sub, idx) => (
+                              <tr key={`${entry.id}-sub-${idx}`} style={{ 
+                                backgroundColor: entry.isOpening ? '#FEF3C7' : (entry.hasCN || entry.isCreditNote ? '#FFFBEB' : '#FFFFFF'),
+                                borderBottom: idx === entry.subRows.length - 1 ? '2px solid #CBD5E1' : '1px solid #E2E8F0',
+                                borderLeft: entry.hasCN || entry.isCreditNote ? '4px solid #F59E0B' : 'none'
+                              }}>
                                 <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
-                                <td style={{ padding: '6px 8px 6px 24px', color: '#64748B', fontSize: '10px', borderRight: '1px solid #E2E8F0' }}>{sub.particular}</td>
+                                <td style={{ padding: '6px 8px 6px 30px', color: '#475569', fontSize: '12px', borderRight: '1px solid #E2E8F0' }}>{sub.particular}</td>
                                 <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
                                 <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right', color: sub.debit < 0 ? '#DC2626' : '', borderRight: '1px solid #E2E8F0' }}>
+                                <td style={{ padding: '6px 8px', textAlign: 'right', fontSize: '12px', borderRight: '1px solid #E2E8F0' }}>
                                   {sub.debit ? formatCurrencyShort(sub.debit) : ''}
                                 </td>
-                                <td style={{ padding: '6px 8px', textAlign: 'right', borderRight: '1px solid #E2E8F0' }}>
+                                <td style={{ padding: '6px 8px', textAlign: 'right', fontSize: '12px', borderRight: '1px solid #E2E8F0' }}>
                                   {sub.credit ? formatCurrencyShort(sub.credit) : ''}
                                 </td>
                                 <td style={{ padding: '6px 8px', borderRight: '1px solid #E2E8F0' }}></td>
@@ -4578,31 +4521,37 @@ ${generateInvoiceHtml(row)}
       </Modal>
 
       {/* Credit Note Modal */}
-      <Modal isOpen={showCreditNoteModal} onClose={() => { setShowCreditNoteModal(false); setCreditNoteForm({ amount: '', tds: '', discount: '', reason: '', date: new Date().toISOString().split('T')[0] }); }} title="📝 Create Credit Note" width="550px">
-        {selectedRow && (
+      <Modal isOpen={showCreditNoteModal} onClose={() => { setShowCreditNoteModal(false); setCreditNoteForm({ amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0] }); }} title="📝 Create Credit Note" width="500px">
+        {selectedRow && (() => {
+          const isSameState = selectedRow.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const gstLabel = isSameState ? 'CGST + SGST (9% + 9%)' : 'IGST (18%)';
+          const baseAmount = parseFloat(creditNoteForm.amount) || 0;
+          const gstAmount = parseFloat(creditNoteForm.gst) || 0;
+          const totalCredit = baseAmount + gstAmount;
+          
+          return (
           <div>
             <div style={{ backgroundColor: '#EFF6FF', padding: '14px', borderRadius: '10px', marginBottom: '16px' }}>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Invoice:</strong> {selectedRow.invoiceNo}</div>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Party:</strong> {selectedRow.partyName}</div>
-              <div style={{ fontSize: '14px' }}><strong>Invoice Amount:</strong> {formatCurrency(selectedRow.invoiceTotalAmount)}</div>
+              <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Invoice Amount:</strong> {formatCurrency(selectedRow.invoiceTotalAmount)}</div>
+              <div style={{ fontSize: '12px', color: '#2563EB' }}><strong>GST Type:</strong> {isSameState ? 'CGST + SGST (Intra-state)' : 'IGST (Inter-state)'}</div>
             </div>
             
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div style={{ marginBottom: '12px' }}>
               <InputField label="Credit Note Date" type="date" value={creditNoteForm.date} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, date: e.target.value })} small />
-              <div></div>
             </div>
             
-            <div style={{ backgroundColor: '#F0FDF4', padding: '14px', borderRadius: '10px', marginBottom: '12px', border: '1px solid #86EFAC' }}>
-              <div style={{ fontWeight: '700', color: '#166534', marginBottom: '10px', fontSize: '13px' }}>💰 Credit Note Breakdown</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                <InputField label="Amount" type="number" value={creditNoteForm.amount} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, amount: e.target.value })} placeholder="0.00" small />
-                <InputField label="TDS" type="number" value={creditNoteForm.tds} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, tds: e.target.value })} placeholder="0.00" small />
-                <InputField label="Discount" type="number" value={creditNoteForm.discount} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, discount: e.target.value })} placeholder="0.00" small />
+            <div style={{ backgroundColor: '#FEF2F2', padding: '14px', borderRadius: '10px', marginBottom: '12px', border: '1px solid #FECACA' }}>
+              <div style={{ fontWeight: '700', color: '#991B1B', marginBottom: '10px', fontSize: '13px' }}>💰 Credit Note Breakdown</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <InputField label="Base Amount" type="number" value={creditNoteForm.amount} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, amount: e.target.value })} placeholder="0.00" small />
+                <InputField label={gstLabel} type="number" value={creditNoteForm.gst} onChange={(e) => setCreditNoteForm({ ...creditNoteForm, gst: e.target.value })} placeholder="0.00" small />
               </div>
-              <div style={{ marginTop: '10px', padding: '8px', backgroundColor: '#DCFCE7', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', fontWeight: '600', color: '#166534' }}>Total Credit:</span>
-                <span style={{ fontSize: '15px', fontWeight: '700', color: '#166534' }}>
-                  {formatCurrency((parseFloat(creditNoteForm.amount) || 0) + (parseFloat(creditNoteForm.tds) || 0) + (parseFloat(creditNoteForm.discount) || 0))}
+              <div style={{ marginTop: '10px', padding: '8px', backgroundColor: '#FEE2E2', borderRadius: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '13px', fontWeight: '600', color: '#991B1B' }}>Total Credit:</span>
+                <span style={{ fontSize: '15px', fontWeight: '700', color: '#991B1B' }}>
+                  {formatCurrency(totalCredit)}
                 </span>
               </div>
             </div>
@@ -4619,10 +4568,11 @@ ${generateInvoiceHtml(row)}
             
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <ActionButton label="Cancel" onClick={() => setShowCreditNoteModal(false)} />
-              <ActionButton label="Create Credit Note" variant="primary" icon={FileText} onClick={handleCreditNoteSubmit} />
+              <ActionButton label="Create Credit Note" variant="danger" icon={FileText} onClick={handleCreditNoteSubmit} />
             </div>
           </div>
-        )}
+          );
+        })()}
       </Modal>
 
       {/* Clear Data Confirmation Modal */}
