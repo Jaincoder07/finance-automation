@@ -1436,7 +1436,6 @@ export default function FinanceApp() {
     
     alert(`✅ Invoice Generated!\n\nInvoice No: ${invoiceNo}\nAmount: ${formatCurrency(totalAmount)}\n\nPlease review and Approve or mark as Need Edits.`);
   };
-  };
 
   const generateCombinedInvoice = () => {
     if (selectedForCombine.size < 2) {
@@ -2464,7 +2463,7 @@ ${generateInvoiceHtml(row)}
                     <React.Fragment key={party}>
                       {/* Party Header Row */}
                       <tr 
-                        onClick={() => togglePartyExpand(party)}
+                        onClick={() => togglePartyExpansion(party)}
                         style={{ backgroundColor: '#1E3A5F', color: 'white', cursor: 'pointer', borderBottom: '1px solid #0F2744' }}
                       >
                         <td colSpan="4" style={{ padding: '12px 14px', fontWeight: '700', fontSize: '14px' }}>
