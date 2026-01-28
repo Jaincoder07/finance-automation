@@ -325,6 +325,7 @@ export default function FinanceApp() {
     finance: 'finance123',
     director: 'director123'
   });
+  const [passwordsLoaded, setPasswordsLoaded] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordError, setPasswordError] = useState('');
@@ -333,6 +334,23 @@ export default function FinanceApp() {
     finance: { role: 'finance', name: 'Finance Team' },
     director: { role: 'director', name: 'Director' }
   };
+
+  // Load passwords from Firebase on app start (before login)
+  useEffect(() => {
+    const loadPasswordsFromFirebase = async () => {
+      try {
+        const data = await loadAppState('indreesh-media');
+        if (data && data.userPasswords) {
+          setUserPasswords(data.userPasswords);
+          console.log('Passwords loaded from Firebase');
+        }
+      } catch (error) {
+        console.error('Error loading passwords:', error);
+      }
+      setPasswordsLoaded(true);
+    };
+    loadPasswordsFromFirebase();
+  }, []);
 
   const [companyConfig, setCompanyConfig] = useState({
     name: 'JAC FinMate',
@@ -709,7 +727,7 @@ export default function FinanceApp() {
     }
   };
 
-  const handlePasswordChange = () => {
+  const handlePasswordChange = async () => {
     if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
       setPasswordError('Please fill all fields');
       return;
@@ -731,7 +749,39 @@ export default function FinanceApp() {
       return;
     }
     
-    setUserPasswords(prev => ({ ...prev, [currentUser]: passwordForm.newPassword }));
+    // Update password in state
+    const newPasswords = { ...userPasswords, [currentUser]: passwordForm.newPassword };
+    setUserPasswords(newPasswords);
+    
+    // Explicitly save to Firebase immediately (don't rely on auto-save)
+    try {
+      await saveAppState('indreesh-media', {
+        masterData,
+        ledgerEntries,
+        receipts,
+        creditNotes,
+        openingBalances,
+        mailerImages,
+        mailerLogo,
+        companyConfig,
+        nextInvoiceNo,
+        nextCombineNo,
+        nextReceiptNo,
+        nextCreditNoteNo,
+        invoiceValues,
+        notifications,
+        whatsappSettings,
+        partyMaster,
+        followups,
+        userPasswords: newPasswords
+      });
+      console.log('Password saved to Firebase');
+    } catch (error) {
+      console.error('Error saving password:', error);
+      setPasswordError('Failed to save password. Please try again.');
+      return;
+    }
+    
     setShowPasswordModal(false);
     setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
     setPasswordError('');
@@ -1936,6 +1986,7 @@ Phone: ${companyConfig.phone}`;
 
   // Clear Master Data Function (clears campaigns, invoices, receipts, ledger entries)
   const clearMasterData = async () => {
+    // Clear all state
     setMasterData([]);
     setLedgerEntries([]);
     setReceipts([]);
@@ -1948,9 +1999,35 @@ Phone: ${companyConfig.phone}`;
     setNextCreditNoteNo(1);
     setSelectedParty(null);
     setExpandedParties(new Set());
+    setFollowups({});
+    setPartyMaster([]);
     
-    // Save to Firebase
-    await saveDataToFirebase();
+    // Directly save cleared data to Firebase (don't rely on state which is async)
+    try {
+      await saveAppState('indreesh-media', {
+        masterData: [],
+        ledgerEntries: [],
+        receipts: [],
+        creditNotes: [],
+        openingBalances: {},
+        mailerImages: {},
+        mailerLogo,
+        companyConfig,
+        nextInvoiceNo: 1,
+        nextCombineNo: 1,
+        nextReceiptNo: 1,
+        nextCreditNoteNo: 1,
+        invoiceValues,
+        notifications: [],
+        whatsappSettings,
+        partyMaster: [],
+        followups: {},
+        userPasswords
+      });
+      console.log('Data cleared and saved to Firebase');
+    } catch (error) {
+      console.error('Error clearing data:', error);
+    }
     
     setShowClearDataModal(false);
     alert('✅ All master data, invoices, receipts, and ledger entries have been cleared!');
@@ -6324,16 +6401,18 @@ ${generateInvoiceHtml(row)}
               fontWeight: '700', 
               border: 'none', 
               borderRadius: '12px', 
-              cursor: 'pointer', 
-              background: 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 100%)',
+              cursor: passwordsLoaded ? 'pointer' : 'wait', 
+              background: passwordsLoaded ? 'linear-gradient(135deg, #1E3A5F 0%, #2874A6 100%)' : '#94A3B8',
               color: 'white',
               transition: 'transform 0.2s, box-shadow 0.2s',
-              boxShadow: '0 4px 14px rgba(40,116,166,0.4)'
+              boxShadow: passwordsLoaded ? '0 4px 14px rgba(40,116,166,0.4)' : 'none',
+              opacity: passwordsLoaded ? 1 : 0.7
             }}
-            onMouseOver={(e) => { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = '0 6px 20px rgba(40,116,166,0.5)'; }}
-            onMouseOut={(e) => { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = '0 4px 14px rgba(40,116,166,0.4)'; }}
+            disabled={!passwordsLoaded}
+            onMouseOver={(e) => { if (passwordsLoaded) { e.target.style.transform = 'translateY(-2px)'; e.target.style.boxShadow = '0 6px 20px rgba(40,116,166,0.5)'; } }}
+            onMouseOut={(e) => { if (passwordsLoaded) { e.target.style.transform = 'translateY(0)'; e.target.style.boxShadow = '0 4px 14px rgba(40,116,166,0.4)'; } }}
           >
-            Sign In
+            {passwordsLoaded ? 'Sign In' : 'Loading...'}
           </button>
           
           <div style={{ marginTop: '24px', textAlign: 'center', color: '#94A3B8', fontSize: '12px' }}>
