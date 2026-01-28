@@ -382,7 +382,7 @@ export default function FinanceApp() {
   
   // Ledger Period & Search
   const [ledgerPeriod, setLedgerPeriod] = useState({
-    fromDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    fromDate: '2020-01-01',
     toDate: new Date().toISOString().split('T')[0]
   });
   const [ledgerPartySearch, setLedgerPartySearch] = useState('');
@@ -3255,7 +3255,8 @@ ${generateInvoiceHtml(row)}
         // Add CN right after invoice
         if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
           processedCNSuffixes.add(invSuffix);
-          const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
+          // CN amounts may be negative, use Math.abs for display
+          const cnAmount = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
           runningBalance -= cnAmount;
           totalCredit += cnAmount;
           
@@ -3277,8 +3278,8 @@ ${generateInvoiceHtml(row)}
           });
           
           // CN sub-rows
-          const cnBase = matchingCN.amount || cnAmount / 1.18;
-          const cnTax = matchingCN.gst || (cnAmount - cnBase);
+          const cnBase = Math.abs(matchingCN.amount) || cnAmount / 1.18;
+          const cnTax = Math.abs(matchingCN.gst) || (cnAmount - cnBase);
           pdfRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: cnBase, isMain: false, isCreditNote: true, hasCN: true });
           pdfRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: cnTax, isMain: false, isCreditNote: true, hasCN: true });
         }
@@ -3321,7 +3322,8 @@ ${generateInvoiceHtml(row)}
         // Add CN right after historical invoice
         if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
           processedCNSuffixes.add(invSuffix);
-          const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
+          // CN amounts may be negative, use Math.abs for display
+          const cnAmount = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
           runningBalance -= cnAmount;
           totalCredit += cnAmount;
           
@@ -3344,7 +3346,7 @@ ${generateInvoiceHtml(row)}
           
           if (matchingCN.subRows && matchingCN.subRows.length > 0) {
             matchingCN.subRows.forEach(sub => {
-              pdfRows.push({ particular: sub.particular, credit: sub.credit, isMain: false, isCreditNote: true, hasCN: true });
+              pdfRows.push({ particular: sub.particular, credit: Math.abs(sub.credit || 0), isMain: false, isCreditNote: true, hasCN: true });
             });
           }
         }
@@ -3563,7 +3565,8 @@ ${generateInvoiceHtml(row)}
         
         const invSuffix = getInvoiceSuffix(inv.invoiceNo);
         const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
-        const cnAmount = matchingCN ? (parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || 0) : 0;
+        // CN amounts may be negative, use Math.abs to get positive value for comparison
+        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || 0) : 0;
         const isFullyCoveredByCN = matchingCN && cnAmount >= totalAmount;
         
         if (!isFullyCoveredByCN) {
@@ -3584,7 +3587,8 @@ ${generateInvoiceHtml(row)}
       historicalInvoices.forEach(entry => {
         const invSuffix = getInvoiceSuffix(entry.vchNo);
         const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
-        const cnAmount = matchingCN ? (parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
+        // CN amounts may be negative, use Math.abs to get positive value for comparison
+        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
         const debit = parseFloat(entry.debit) || 0;
         const isFullyCoveredByCN = matchingCN && cnAmount >= debit;
         
@@ -3768,7 +3772,8 @@ ${generateInvoiceHtml(row)}
           // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(inv.invoiceNo);
           const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
-          const cnAmount = matchingCN ? (matchingCN.totalAmount || matchingCN.credit || 0) : 0;
+          // CN amounts may be negative, use Math.abs to get positive value for comparison
+          const cnAmount = matchingCN ? Math.abs(matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
           const isFullyCoveredByCN = hasCN && cnAmount >= totalAmount;
           const partialCNBalance = hasCN && !isFullyCoveredByCN ? totalAmount - cnAmount : 0;
@@ -3844,22 +3849,23 @@ ${generateInvoiceHtml(row)}
           // Add credit note entry RIGHT AFTER invoice if exists
           if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
             processedCNSuffixes.add(invSuffix);
-            const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
-            runningBalance -= cnAmount;
-            totalCredit += cnAmount;
+            // CN amounts may be negative, use Math.abs for display
+            const cnAmountDisplay = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
+            runningBalance -= cnAmountDisplay;
+            totalCredit += cnAmountDisplay;
             
             // CN sub-rows
             const cnSubRows = [];
             if (matchingCN.amount) {
-              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: matchingCN.amount });
+              cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: Math.abs(matchingCN.amount) });
             }
             if (matchingCN.gst) {
-              cnSubRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: matchingCN.gst });
+              cnSubRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: Math.abs(matchingCN.gst) });
             }
             // If no breakdown, calculate from total
-            if (cnSubRows.length === 0 && cnAmount > 0) {
-              const baseAmt = cnAmount / 1.18;
-              const taxAmt = cnAmount - baseAmt;
+            if (cnSubRows.length === 0 && cnAmountDisplay > 0) {
+              const baseAmt = cnAmountDisplay / 1.18;
+              const taxAmt = cnAmountDisplay - baseAmt;
               cnSubRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: baseAmt });
               cnSubRows.push({ particular: isSameState ? 'CGST + SGST' : 'IGST', credit: taxAmt });
             }
@@ -3871,7 +3877,7 @@ ${generateInvoiceHtml(row)}
               vchType: 'Credit Note',
               vchNo: matchingCN.creditNoteNo || matchingCN.vchNo,
               debit: 0,
-              credit: cnAmount,
+              credit: cnAmountDisplay,
               receiptDate: '',
               amountReceived: 0,
               tdsReceived: 0,
@@ -3890,7 +3896,8 @@ ${generateInvoiceHtml(row)}
           // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(entry.vchNo);
           const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
-          const cnAmount = matchingCN ? (matchingCN.totalAmount || matchingCN.credit || 0) : 0;
+          // CN amounts may be negative, use Math.abs to get positive value for comparison
+          const cnAmount = matchingCN ? Math.abs(matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
           const isFullyCoveredByCN = hasCN && cnAmount >= debit;
           const partialCNBalance = hasCN && !isFullyCoveredByCN ? debit - cnAmount : 0;
@@ -4296,7 +4303,8 @@ ${generateInvoiceHtml(row)}
         const receipt = receipts.find(r => r.invoiceNo === row.invoiceNo);
         const cn = creditNotes.find(c => c.invoiceNo === row.invoiceNo);
         const invoiceAmount = parseFloat(row.invoiceTotalAmount) || 0;
-        const cnAmount = cn ? (parseFloat(cn.totalAmount) || parseFloat(cn.credit) || 0) : 0;
+        // CN amounts may be negative, use Math.abs to get positive value for comparison
+        const cnAmount = cn ? Math.abs(parseFloat(cn.totalAmount) || parseFloat(cn.credit) || 0) : 0;
         const isFullyCoveredByCN = cn && cnAmount >= invoiceAmount;
         
         // Include if: no receipt AND (no CN OR partial CN)
@@ -4309,7 +4317,7 @@ ${generateInvoiceHtml(row)}
             invoiceDate: row.invoiceDate,
             invoiceTotalAmount: row.invoiceTotalAmount,
             pendingAmount: pendingAmount,
-            hasPartialCN: !!cn && !isFullyCoveredByCN,
+            hasPartialCN: !!cn && !isFullyCoveredByCN && cnAmount > 0,
             cnAmount: cnAmount,
             subject: row.subject,
             campaigns: [row]
