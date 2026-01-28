@@ -3492,10 +3492,112 @@ ${generateInvoiceHtml(row)}
   };
 
   const renderLedgers = () => {
+    // Calculate closing balance as sum of individual invoice balances
     const getPartyBalance = (party) => {
       const opening = openingBalances[party] || 0;
-      const ledgerBal = ledgerEntries.filter(e => e.partyName === party).reduce((sum, e) => sum + e.debit - e.credit, 0);
-      return opening + ledgerBal;
+      
+      // Get all invoices for this party
+      const partyInvoices = masterData.filter(r => 
+        r.partyName === party && 
+        r.invoiceGenerated && 
+        r.invoiceStatus === 'Approved'
+      );
+      
+      // Group by invoice number
+      const invoiceMap = new Map();
+      partyInvoices.forEach(row => {
+        if (!invoiceMap.has(row.invoiceNo)) {
+          invoiceMap.set(row.invoiceNo, { 
+            invoiceNo: row.invoiceNo, 
+            campaigns: [row],
+            totalAmount: parseFloat(row.invoiceTotalAmount) || 0
+          });
+        } else {
+          invoiceMap.get(row.invoiceNo).campaigns.push(row);
+        }
+      });
+      
+      // Get receipts and credit notes for this party
+      const partyReceipts = receipts.filter(r => r.partyName === party);
+      const partyCreditNotes = creditNotes.filter(cn => cn.partyName === party);
+      
+      // Historical invoices
+      const historicalInvoices = ledgerEntries.filter(e => 
+        e.partyName === party && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+      );
+      
+      // Historical CNs
+      const historicalCNs = ledgerEntries.filter(e => 
+        e.partyName === party && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+      );
+      
+      // Build CN map by suffix
+      const getInvoiceSuffix = (vchNo) => {
+        if (!vchNo) return '';
+        const parts = vchNo.split('/');
+        return parts[parts.length - 1];
+      };
+      
+      const creditNoteByInvoiceSuffix = new Map();
+      partyCreditNotes.forEach(cn => {
+        const suffix = getInvoiceSuffix(cn.creditNoteNo || cn.invoiceNo);
+        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
+          creditNoteByInvoiceSuffix.set(suffix, cn);
+        }
+      });
+      historicalCNs.forEach(cn => {
+        const suffix = getInvoiceSuffix(cn.vchNo);
+        if (suffix && !creditNoteByInvoiceSuffix.has(suffix)) {
+          creditNoteByInvoiceSuffix.set(suffix, cn);
+        }
+      });
+      
+      let totalBalance = 0;
+      
+      // Add opening balance if positive
+      if (opening > 0) totalBalance += opening;
+      
+      // Calculate balance for each new system invoice
+      Array.from(invoiceMap.values()).forEach(inv => {
+        const totalAmount = inv.totalAmount; // Use actual invoiceTotalAmount
+        
+        const invSuffix = getInvoiceSuffix(inv.invoiceNo);
+        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const cnAmount = matchingCN ? (parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || 0) : 0;
+        const isFullyCoveredByCN = matchingCN && cnAmount >= totalAmount;
+        
+        if (!isFullyCoveredByCN) {
+          // Calculate remaining balance after CN (if partial)
+          let remainingAfterCN = matchingCN ? totalAmount - cnAmount : totalAmount;
+          
+          const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
+          if (invoiceReceipt) {
+            const balanceAfterReceipt = remainingAfterCN - (parseFloat(invoiceReceipt.amount) || 0) - (parseFloat(invoiceReceipt.tds) || 0) - (parseFloat(invoiceReceipt.discount) || 0);
+            if (balanceAfterReceipt > 0) totalBalance += balanceAfterReceipt;
+          } else {
+            if (remainingAfterCN > 0) totalBalance += remainingAfterCN;
+          }
+        }
+      });
+      
+      // Calculate balance for historical invoices
+      historicalInvoices.forEach(entry => {
+        const invSuffix = getInvoiceSuffix(entry.vchNo);
+        const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+        const cnAmount = matchingCN ? (parseFloat(matchingCN.totalAmount) || parseFloat(matchingCN.credit) || parseFloat(matchingCN.debit) || 0) : 0;
+        const debit = parseFloat(entry.debit) || 0;
+        const isFullyCoveredByCN = matchingCN && cnAmount >= debit;
+        
+        if (!isFullyCoveredByCN) {
+          let remainingAfterCN = matchingCN ? debit - cnAmount : debit;
+          const received = parseFloat(entry.amountReceived) || 0;
+          const tds = parseFloat(entry.tdsReceived) || 0;
+          const balance = remainingAfterCN - received - tds;
+          if (balance > 0) totalBalance += balance;
+        }
+      });
+      
+      return totalBalance;
     };
     
     // Filter parties by search
@@ -3666,7 +3768,10 @@ ${generateInvoiceHtml(row)}
           // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(inv.invoiceNo);
           const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+          const cnAmount = matchingCN ? (matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
+          const isFullyCoveredByCN = hasCN && cnAmount >= totalAmount;
+          const partialCNBalance = hasCN && !isFullyCoveredByCN ? totalAmount - cnAmount : 0;
           
           // Get receipt info for this invoice
           const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
@@ -3705,7 +3810,15 @@ ${generateInvoiceHtml(row)}
           } else if (inv.receiptStatus === 'Received') {
             paymentStatus = 'Received';
             balanceAmount = 0;
-          } else if (!hasCN) {
+          } else if (isFullyCoveredByCN) {
+            // CN fully covers invoice - no payment needed
+            paymentStatus = 'CN Closed';
+            balanceAmount = 0;
+          } else if (hasCN && partialCNBalance > 0) {
+            // Partial CN - still pending for remaining amount
+            paymentStatus = 'Partial CN';
+            balanceAmount = partialCNBalance;
+          } else {
             paymentStatus = 'Pending';
           }
           
@@ -3721,7 +3834,7 @@ ${generateInvoiceHtml(row)}
             receiptDate: receiptDate,
             amountReceived: amountReceived,
             tdsReceived: tdsReceived,
-            balance: hasCN ? '-' : (balanceAmount > 0 ? balanceAmount : 0),
+            balance: isFullyCoveredByCN ? '-' : (balanceAmount > 0 ? balanceAmount : 0),
             paymentStatus: paymentStatus,
             isInvoice: true,
             hasCN: hasCN,
@@ -3777,7 +3890,10 @@ ${generateInvoiceHtml(row)}
           // Check for matching credit note by suffix
           const invSuffix = getInvoiceSuffix(entry.vchNo);
           const matchingCN = creditNoteByInvoiceSuffix.get(invSuffix);
+          const cnAmount = matchingCN ? (matchingCN.totalAmount || matchingCN.credit || 0) : 0;
           const hasCN = !!matchingCN;
+          const isFullyCoveredByCN = hasCN && cnAmount >= debit;
+          const partialCNBalance = hasCN && !isFullyCoveredByCN ? debit - cnAmount : 0;
           
           runningBalance += debit - credit;
           totalDebit += debit;
@@ -3787,6 +3903,18 @@ ${generateInvoiceHtml(row)}
           
           // Use sub-rows from historical entry
           const subRows = entry.subRows || [];
+          
+          // Calculate balance
+          let balanceAmount = debit - (entry.amountReceived || 0) - (entry.tdsReceived || 0);
+          let paymentStatus = entry.paymentStatus || '';
+          
+          if (isFullyCoveredByCN) {
+            balanceAmount = 0;
+            paymentStatus = 'CN Closed';
+          } else if (hasCN && partialCNBalance > 0) {
+            balanceAmount = partialCNBalance - (entry.amountReceived || 0) - (entry.tdsReceived || 0);
+            if (balanceAmount > 0) paymentStatus = 'Partial CN';
+          }
           
           entries.push({
             id: entry.id,
@@ -3799,8 +3927,8 @@ ${generateInvoiceHtml(row)}
             receiptDate: entry.receiptDate || '',
             amountReceived: entry.amountReceived || 0,
             tdsReceived: entry.tdsReceived || 0,
-            balance: hasCN ? '-' : (entry.balance || (debit - (entry.amountReceived || 0) - (entry.tdsReceived || 0))),
-            paymentStatus: hasCN ? '' : (entry.paymentStatus || ''),
+            balance: isFullyCoveredByCN ? '-' : (balanceAmount > 0 ? balanceAmount : 0),
+            paymentStatus: paymentStatus,
             isInvoice: true,
             isHistorical: true,
             hasCN: hasCN,
@@ -3810,7 +3938,6 @@ ${generateInvoiceHtml(row)}
           // Add credit note entry RIGHT AFTER historical invoice if exists
           if (matchingCN && !processedCNSuffixes.has(invSuffix)) {
             processedCNSuffixes.add(invSuffix);
-            const cnAmount = matchingCN.totalAmount || matchingCN.credit || 0;
             runningBalance -= cnAmount;
             totalCredit += cnAmount;
             
@@ -4168,12 +4295,22 @@ ${generateInvoiceHtml(row)}
       if (!invoiceMap.has(row.invoiceNo)) {
         const receipt = receipts.find(r => r.invoiceNo === row.invoiceNo);
         const cn = creditNotes.find(c => c.invoiceNo === row.invoiceNo);
-        if (!receipt && !cn) {
+        const invoiceAmount = parseFloat(row.invoiceTotalAmount) || 0;
+        const cnAmount = cn ? (parseFloat(cn.totalAmount) || parseFloat(cn.credit) || 0) : 0;
+        const isFullyCoveredByCN = cn && cnAmount >= invoiceAmount;
+        
+        // Include if: no receipt AND (no CN OR partial CN)
+        if (!receipt && !isFullyCoveredByCN) {
+          // Calculate pending amount (after partial CN if any)
+          const pendingAmount = cn ? invoiceAmount - cnAmount : invoiceAmount;
           invoiceMap.set(row.invoiceNo, {
             invoiceNo: row.invoiceNo,
             partyName: row.partyName,
             invoiceDate: row.invoiceDate,
             invoiceTotalAmount: row.invoiceTotalAmount,
+            pendingAmount: pendingAmount,
+            hasPartialCN: !!cn && !isFullyCoveredByCN,
+            cnAmount: cnAmount,
             subject: row.subject,
             campaigns: [row]
           });
@@ -4207,12 +4344,36 @@ ${generateInvoiceHtml(row)}
       .sort((a, b) => new Date(a.nextFollowupDate) - new Date(b.nextFollowupDate));
   }, [followups]);
   
+  // Group pending invoices by party for display
+  const pendingInvoicesGroupedByParty = useMemo(() => {
+    const grouped = {};
+    pendingInvoicesForFollowup.forEach(inv => {
+      if (!grouped[inv.partyName]) {
+        grouped[inv.partyName] = {
+          partyName: inv.partyName,
+          invoices: [],
+          totalAmount: 0
+        };
+      }
+      grouped[inv.partyName].invoices.push(inv);
+      // Use pending amount (after partial CN) instead of total amount
+      grouped[inv.partyName].totalAmount += parseFloat(inv.pendingAmount || inv.invoiceTotalAmount) || 0;
+    });
+    // Sort parties alphabetically
+    return Object.values(grouped).sort((a, b) => a.partyName.localeCompare(b.partyName));
+  }, [pendingInvoicesForFollowup]);
+  
   const renderFollowups = () => {
     return (
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>📞 Followups</h1>
-          {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <span style={{ padding: '6px 12px', backgroundColor: '#EFF6FF', borderRadius: '6px', fontSize: '12px', color: '#1E40AF', fontWeight: '600' }}>
+              {pendingInvoicesGroupedByParty.length} Parties | {pendingInvoicesForFollowup.length} Invoices
+            </span>
+            {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
+          </div>
         </div>
         
         {/* Upcoming Followups */}
@@ -4235,106 +4396,159 @@ ${generateInvoiceHtml(row)}
           </Card>
         )}
         
-        {/* Pending Invoices for Followup */}
-        <Card title="📋 Pending Invoices - Need Followup" noPadding>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
-                <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '700' }}>Invoice No</th>
-                <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '700' }}>Party</th>
-                <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Invoice Date</th>
-                <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>Amount</th>
-                <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Days Pending</th>
-                <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Last Followup</th>
-                <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pendingInvoicesForFollowup.length === 0 ? (
-                <tr><td colSpan="7" style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>🎉 No pending invoices! All payments received.</td></tr>
-              ) : (
-                pendingInvoicesForFollowup.map(inv => {
-                  const invFollowups = followupsByInvoice[inv.invoiceNo] || [];
-                  const lastFollowup = invFollowups[0];
-                  const daysPending = Math.floor((new Date() - new Date(inv.invoiceDate)) / (1000 * 60 * 60 * 24));
-                  
-                  return (
-                    <React.Fragment key={inv.invoiceNo}>
-                      <tr style={{ borderBottom: '1px solid #E2E8F0', backgroundColor: daysPending > 30 ? '#FEF2F2' : daysPending > 15 ? '#FFFBEB' : '#FFFFFF' }}>
-                        <td style={{ padding: '10px 12px', fontWeight: '600', color: '#2874A6' }}>{inv.invoiceNo}</td>
-                        <td style={{ padding: '10px 12px', fontWeight: '600' }}>{inv.partyName}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>{formatDate(inv.invoiceDate)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600' }}>{formatCurrency(inv.invoiceTotalAmount)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                          <span style={{ 
-                            padding: '3px 10px', 
-                            borderRadius: '12px', 
-                            fontSize: '11px', 
-                            fontWeight: '700',
-                            backgroundColor: daysPending > 30 ? '#FEE2E2' : daysPending > 15 ? '#FEF3C7' : '#DCFCE7',
-                            color: daysPending > 30 ? '#991B1B' : daysPending > 15 ? '#92400E' : '#166534'
-                          }}>
-                            {daysPending} days
-                          </span>
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '11px' }}>
-                          {lastFollowup ? (
-                            <div>
-                              <div style={{ fontWeight: '600' }}>{formatDate(lastFollowup.followupDate)}</div>
-                              <div style={{ color: '#64748B', fontSize: '10px' }}>{lastFollowup.notes?.substring(0, 30)}{lastFollowup.notes?.length > 30 ? '...' : ''}</div>
-                            </div>
-                          ) : (
-                            <span style={{ color: '#DC2626', fontWeight: '600' }}>No followup yet</span>
-                          )}
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                            {canEdit && <ActionButton icon={Plus} small variant="primary" onClick={() => openFollowupModal(inv)} title="Add Followup" />}
-                            <ActionButton icon={Clipboard} small variant="brand" onClick={() => copyFollowupTemplate(inv)} title="Copy Email Template" />
-                            <ActionButton icon={Mail} small variant="success" onClick={() => openGmailWithFollowup(inv)} title="Search in Gmail" />
-                          </div>
-                        </td>
-                      </tr>
-                      {/* Followup history for this invoice */}
-                      {invFollowups.length > 0 && (
-                        <tr>
-                          <td colSpan="7" style={{ padding: '8px 12px 12px 40px', backgroundColor: '#F8FAFC' }}>
-                            <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B', marginBottom: '6px' }}>Followup History:</div>
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                              {invFollowups.map(f => (
-                                <div key={f.id} style={{ 
-                                  padding: '6px 10px', 
-                                  backgroundColor: '#FFFFFF', 
-                                  borderRadius: '6px', 
-                                  border: '1px solid #E2E8F0',
-                                  fontSize: '11px'
-                                }}>
-                                  <div style={{ fontWeight: '600', color: '#2874A6' }}>{formatDate(f.followupDate)}</div>
-                                  <div style={{ color: '#475569', marginTop: '2px' }}>{f.notes}</div>
-                                  {f.nextFollowupDate && (
-                                    <div style={{ color: '#DC2626', marginTop: '2px', fontSize: '10px' }}>Next: {formatDate(f.nextFollowupDate)}</div>
-                                  )}
-                                  {canEdit && (
-                                    <button onClick={() => handleDeleteFollowup(f.id)} style={{ 
-                                      background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', 
-                                      fontSize: '10px', padding: '2px 0', marginTop: '4px' 
-                                    }}>
-                                      🗑️ Delete
-                                    </button>
-                                  )}
-                                </div>
-                              ))}
+        {/* Pending Invoices Grouped by Party */}
+        {pendingInvoicesGroupedByParty.length === 0 ? (
+          <Card>
+            <div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>🎉 No pending invoices! All payments received.</div>
+          </Card>
+        ) : (
+          pendingInvoicesGroupedByParty.map(partyGroup => (
+            <Card key={partyGroup.partyName} style={{ marginBottom: '16px' }} noPadding>
+              {/* Party Header */}
+              <div style={{ 
+                padding: '12px 16px', 
+                backgroundColor: '#1E293B', 
+                color: 'white',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <span style={{ fontSize: '15px', fontWeight: '700' }}>🏢 {partyGroup.partyName}</span>
+                  <span style={{ 
+                    padding: '3px 10px', 
+                    backgroundColor: '#3B82F6', 
+                    borderRadius: '12px', 
+                    fontSize: '11px', 
+                    fontWeight: '600' 
+                  }}>
+                    {partyGroup.invoices.length} Invoice{partyGroup.invoices.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: '700', color: '#FCD34D' }}>
+                  Total: {formatCurrency(partyGroup.totalAmount)}
+                </div>
+              </div>
+              
+              {/* Invoices Table */}
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', fontWeight: '700' }}>Invoice No</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Invoice Date</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '700' }}>Amount</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Days Pending</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Last Followup</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '700' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {partyGroup.invoices.map(inv => {
+                    const invFollowups = followupsByInvoice[inv.invoiceNo] || [];
+                    const lastFollowup = invFollowups[0];
+                    const daysPending = Math.floor((new Date() - new Date(inv.invoiceDate)) / (1000 * 60 * 60 * 24));
+                    
+                    return (
+                      <React.Fragment key={inv.invoiceNo}>
+                        <tr style={{ borderBottom: '1px solid #E2E8F0', backgroundColor: daysPending > 30 ? '#FEF2F2' : daysPending > 15 ? '#FFFBEB' : '#FFFFFF' }}>
+                          <td style={{ padding: '10px 12px', fontWeight: '600', color: '#2874A6' }}>
+                            {inv.invoiceNo}
+                            {inv.hasPartialCN && (
+                              <span style={{ 
+                                marginLeft: '6px', 
+                                padding: '2px 6px', 
+                                backgroundColor: '#FEF3C7', 
+                                color: '#92400E', 
+                                borderRadius: '4px', 
+                                fontSize: '9px', 
+                                fontWeight: '700' 
+                              }}>
+                                Partial CN
+                              </span>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>{formatDate(inv.invoiceDate)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600' }}>
+                            {inv.hasPartialCN ? (
+                              <div>
+                                <div style={{ color: '#DC2626' }}>{formatCurrency(inv.pendingAmount)}</div>
+                                <div style={{ fontSize: '9px', color: '#64748B', textDecoration: 'line-through' }}>{formatCurrency(inv.invoiceTotalAmount)}</div>
+                              </div>
+                            ) : (
+                              formatCurrency(inv.invoiceTotalAmount)
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                            <span style={{ 
+                              padding: '3px 10px', 
+                              borderRadius: '12px', 
+                              fontSize: '11px', 
+                              fontWeight: '700',
+                              backgroundColor: daysPending > 30 ? '#FEE2E2' : daysPending > 15 ? '#FEF3C7' : '#DCFCE7',
+                              color: daysPending > 30 ? '#991B1B' : daysPending > 15 ? '#92400E' : '#166534'
+                            }}>
+                              {daysPending} days
+                            </span>
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center', fontSize: '11px' }}>
+                            {lastFollowup ? (
+                              <div>
+                                <div style={{ fontWeight: '600' }}>{formatDate(lastFollowup.followupDate)}</div>
+                                <div style={{ color: '#64748B', fontSize: '10px' }}>{lastFollowup.notes?.substring(0, 30)}{lastFollowup.notes?.length > 30 ? '...' : ''}</div>
+                              </div>
+                            ) : (
+                              <span style={{ color: '#DC2626', fontWeight: '600' }}>No followup yet</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'center' }}>
+                            <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                              {canEdit && <ActionButton icon={Plus} small variant="primary" onClick={() => openFollowupModal(inv)} title="Add Followup" />}
+                              <ActionButton icon={Clipboard} small variant="brand" onClick={() => copyFollowupTemplate(inv)} title="Copy Email Template" />
+                              <ActionButton icon={Mail} small variant="success" onClick={() => openGmailWithFollowup(inv)} title="Search in Gmail" />
                             </div>
                           </td>
                         </tr>
-                      )}
-                    </React.Fragment>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </Card>
+                        {/* Followup history for this invoice */}
+                        {invFollowups.length > 0 && (
+                          <tr>
+                            <td colSpan="6" style={{ padding: '8px 12px 12px 40px', backgroundColor: '#F8FAFC' }}>
+                              <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B', marginBottom: '6px' }}>Followup History:</div>
+                              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                                {invFollowups.map(f => (
+                                  <div key={f.id} style={{ 
+                                    padding: '6px 10px', 
+                                    backgroundColor: '#FFFFFF', 
+                                    borderRadius: '6px', 
+                                    border: '1px solid #E2E8F0',
+                                    fontSize: '11px'
+                                  }}>
+                                    <div style={{ fontWeight: '600', color: '#2874A6' }}>{formatDate(f.followupDate)}</div>
+                                    <div style={{ color: '#475569', marginTop: '2px' }}>{f.notes}</div>
+                                    {f.nextFollowupDate && (
+                                      <div style={{ color: '#DC2626', marginTop: '2px', fontSize: '10px' }}>Next: {formatDate(f.nextFollowupDate)}</div>
+                                    )}
+                                    {canEdit && (
+                                      <button onClick={() => handleDeleteFollowup(f.id)} style={{ 
+                                        background: 'none', border: 'none', color: '#DC2626', cursor: 'pointer', 
+                                        fontSize: '10px', padding: '2px 0', marginTop: '4px' 
+                                      }}>
+                                        🗑️ Delete
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </Card>
+          ))
+        )}
       </div>
     );
   };
