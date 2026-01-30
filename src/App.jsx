@@ -546,27 +546,34 @@ export default function FinanceApp() {
   }, []);
 
   // Get party GSTIN by matching party name and state
+  // Get party GSTIN by matching party name and state (CASE-INSENSITIVE)
   const getPartyGstin = useCallback((partyName, stateDetails) => {
     if (!partyName) return '';
     const normalizedState = normalizeStateName(stateDetails);
+    const partyNameUpper = partyName.trim().toUpperCase();
     
-    // Try composite key first
-    const compositeKey = `${partyName.trim()}|${normalizedState}`;
+    // Try composite key with uppercase party name
+    const compositeKey = `${partyNameUpper}|${normalizedState}`;
     if (safePartyMaster[compositeKey]?.gstin) {
       return safePartyMaster[compositeKey].gstin;
     }
     
-    // Fallback: search through all entries for matching party name and state
+    // Fallback: search through all entries for matching party name (case-insensitive) and state
     for (const key in safePartyMaster) {
       const entry = safePartyMaster[key];
-      if (entry.partyName === partyName.trim() && entry.normalizedState === normalizedState) {
+      const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+      if (entryNameUpper === partyNameUpper && entry.normalizedState === normalizedState) {
         return entry.gstin || '';
       }
     }
     
-    // Last fallback: try old format (just party name as key)
-    if (safePartyMaster[partyName.trim()]?.gstin) {
-      return safePartyMaster[partyName.trim()].gstin;
+    // Try matching just by party name (case-insensitive) if state doesn't match
+    for (const key in safePartyMaster) {
+      const entry = safePartyMaster[key];
+      const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+      if (entryNameUpper === partyNameUpper && entry.gstin) {
+        return entry.gstin;
+      }
     }
     
     return '';
@@ -998,21 +1005,26 @@ export default function FinanceApp() {
     return Array.from(partySet).filter(Boolean).sort();
   }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances]);
 
-  // Parties with state info for ledger - includes ALL from Party Master
+  // Parties with state info for ledger - includes ALL from Party Master (CASE-INSENSITIVE)
   const partiesForLedger = useMemo(() => {
     const partyList = [];
-    const addedKeys = new Set();
+    const addedKeys = new Set(); // Using UPPERCASE keys for case-insensitive matching
+    
+    // Helper to create case-insensitive key
+    const makeKey = (name, state) => `${(name || '').trim().toUpperCase()}|${state}`;
     
     // FIRST: Add ALL entries from Party Master (this is the primary source)
     Object.entries(safePartyMaster).forEach(([key, entry]) => {
       if (entry.partyName) {
-        const partyKey = `${entry.partyName}|${entry.normalizedState || normalizeStateName(entry.stateName)}`;
+        const normalizedState = entry.normalizedState || normalizeStateName(entry.stateName);
+        const partyKey = makeKey(entry.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
           partyList.push({
-            partyName: entry.partyName,
+            partyName: entry.partyName, // Keep original case for display
+            partyNameUpper: entry.partyName.trim().toUpperCase(),
             state: entry.stateName || '',
-            normalizedState: entry.normalizedState || normalizeStateName(entry.stateName),
+            normalizedState: normalizedState,
             gstin: entry.gstin || '',
             fromPartyMaster: true
           });
@@ -1024,13 +1036,14 @@ export default function FinanceApp() {
     safeMasterData.forEach(r => {
       if (r.partyName) {
         const normalizedState = normalizeStateName(r.statePartyDetails);
-        const partyKey = `${r.partyName}|${normalizedState}`;
+        const partyKey = makeKey(r.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
-          // Try to find GSTIN from party master
+          // Try to find GSTIN from party master (case-insensitive)
           const gstin = getPartyGstin(r.partyName, r.statePartyDetails);
           partyList.push({
             partyName: r.partyName,
+            partyNameUpper: r.partyName.trim().toUpperCase(),
             state: r.statePartyDetails || '',
             normalizedState: normalizedState,
             gstin: gstin,
@@ -1044,12 +1057,13 @@ export default function FinanceApp() {
     safeLedgerEntries.forEach(e => {
       if (e.partyName) {
         const normalizedState = normalizeStateName(e.state || e.statePartyDetails || '');
-        const partyKey = `${e.partyName}|${normalizedState}`;
+        const partyKey = makeKey(e.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
           const gstin = getPartyGstin(e.partyName, e.state || e.statePartyDetails);
           partyList.push({
             partyName: e.partyName,
+            partyNameUpper: e.partyName.trim().toUpperCase(),
             state: e.state || e.statePartyDetails || '',
             normalizedState: normalizedState,
             gstin: gstin,
@@ -1061,9 +1075,11 @@ export default function FinanceApp() {
     
     // FOURTH: Add from opening balances (if not already present)
     Object.keys(safeOpeningBalances).forEach(partyName => {
-      if (partyName && !Array.from(addedKeys).some(k => k.startsWith(partyName + '|'))) {
+      const partyKeyPrefix = partyName.trim().toUpperCase() + '|';
+      if (partyName && !Array.from(addedKeys).some(k => k.startsWith(partyKeyPrefix))) {
         partyList.push({
           partyName: partyName,
+          partyNameUpper: partyName.trim().toUpperCase(),
           state: '',
           normalizedState: '',
           gstin: '',
@@ -1857,17 +1873,18 @@ Phone: ${companyConfig.phone}`;
         const stateName = (row['State Name'] || row['STATE NAME'] || row['State'] || row['STATE'] || '').trim();
         
         if (partyName) {
-          // Create composite key: partyName|normalizedState
+          // Create composite key using UPPERCASE for case-insensitive matching
           const normalizedState = normalizeStateName(stateName);
-          const compositeKey = `${partyName}|${normalizedState}`;
+          const compositeKey = `${partyName.toUpperCase()}|${normalizedState}`;
           
           newPartyMaster[compositeKey] = {
-            partyName: partyName,
+            partyName: partyName, // Keep original case for display
+            partyNameUpper: partyName.toUpperCase(), // For matching
             ledgerGroup: row['Ledger Group'] || row['LEDGER GROUP'] || 'Sundry Debtors',
             stateName: stateName,
             normalizedState: normalizedState,
             gstRegType: row['GST Registration Type'] || row['GST REGISTRATION TYPE'] || 'Regular',
-            gstin: row['GSTIN/UIN'] || row['GSTIN'] || row['GST'] || ''
+            gstin: (row['GSTIN/UIN'] || row['GSTIN'] || row['GST'] || '').trim()
           };
           addedCount++;
         }
@@ -4001,9 +4018,10 @@ ${generateInvoiceHtml(row)}
       return sum;
     }, 0);
     
-    // Get party address and GSTIN from partiesForLedger (includes Party Master data)
-    const partyInfo = partiesForLedger.find(p => p.partyName === selectedParty) || {};
-    const partyRow = masterData.find(r => r.partyName === selectedParty);
+    // Get party address and GSTIN from partiesForLedger (includes Party Master data) - CASE-INSENSITIVE
+    const selectedPartyUpper = (selectedParty || '').trim().toUpperCase();
+    const partyInfo = partiesForLedger.find(p => p.partyNameUpper === selectedPartyUpper) || {};
+    const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === selectedPartyUpper);
     const partyAddress = partyRow?.statePartyDetails || partyInfo.state || '';
     // Get GSTIN - first try partiesForLedger, then fallback to getPartyGstin
     const partyGstin = partyInfo.gstin || getPartyGstin(selectedParty, partyAddress);
@@ -4139,13 +4157,14 @@ ${generateInvoiceHtml(row)}
   };
 
   const renderLedgers = () => {
-    // Calculate closing balance as sum of individual invoice balances
+    // Calculate closing balance as sum of individual invoice balances (CASE-INSENSITIVE)
     const getPartyBalance = (party) => {
+      const partyUpper = (party || '').trim().toUpperCase();
       const opening = openingBalances[party] || 0;
       
-      // Get all invoices for this party
+      // Get all invoices for this party (case-insensitive)
       const partyInvoices = masterData.filter(r => 
-        r.partyName === party && 
+        r.partyName?.trim().toUpperCase() === partyUpper && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved'
       );
@@ -4164,18 +4183,18 @@ ${generateInvoiceHtml(row)}
         }
       });
       
-      // Get receipts and credit notes for this party
-      const partyReceipts = receipts.filter(r => r.partyName === party);
-      const partyCreditNotes = creditNotes.filter(cn => cn.partyName === party);
+      // Get receipts and credit notes for this party (case-insensitive)
+      const partyReceipts = receipts.filter(r => r.partyName?.trim().toUpperCase() === partyUpper);
+      const partyCreditNotes = creditNotes.filter(cn => cn.partyName?.trim().toUpperCase() === partyUpper);
       
-      // Historical invoices
+      // Historical invoices (case-insensitive)
       const historicalInvoices = ledgerEntries.filter(e => 
-        e.partyName === party && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+        e.partyName?.trim().toUpperCase() === partyUpper && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
       );
       
-      // Historical CNs
+      // Historical CNs (case-insensitive)
       const historicalCNs = ledgerEntries.filter(e => 
-        e.partyName === party && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+        e.partyName?.trim().toUpperCase() === partyUpper && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
       
       // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
@@ -4262,27 +4281,30 @@ ${generateInvoiceHtml(row)}
       (p.state && p.state.toLowerCase().includes(ledgerPartySearch.toLowerCase()))
     );
     
-    // Get party info from partiesForLedger
+    // Get party info from partiesForLedger (CASE-INSENSITIVE)
     const getPartyInfo = (partyName) => {
-      return partiesForLedger.find(p => p.partyName === partyName) || { state: '', gstin: '' };
+      const nameUpper = (partyName || '').trim().toUpperCase();
+      return partiesForLedger.find(p => p.partyNameUpper === nameUpper) || { state: '', gstin: '' };
     };
     
-    // Get party address from masterData or partiesForLedger
+    // Get party address from masterData or partiesForLedger (CASE-INSENSITIVE)
     const getPartyAddress = (partyName) => {
-      const partyRow = masterData.find(r => r.partyName === partyName);
+      const nameUpper = (partyName || '').trim().toUpperCase();
+      const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === nameUpper);
       if (partyRow?.statePartyDetails) return partyRow.statePartyDetails;
-      const partyInfo = partiesForLedger.find(p => p.partyName === partyName);
+      const partyInfo = partiesForLedger.find(p => p.partyNameUpper === nameUpper);
       return partyInfo?.state || '';
     };
     
-    // Get party GSTIN for selected party
+    // Get party GSTIN for selected party (CASE-INSENSITIVE)
     const getSelectedPartyGstin = (partyName) => {
+      const nameUpper = (partyName || '').trim().toUpperCase();
       // First try from partiesForLedger (includes Party Master data)
-      const partyInfo = partiesForLedger.find(p => p.partyName === partyName);
+      const partyInfo = partiesForLedger.find(p => p.partyNameUpper === nameUpper);
       if (partyInfo?.gstin) return partyInfo.gstin;
       
       // Fallback: try matching with state from masterData
-      const partyRow = masterData.find(r => r.partyName === partyName);
+      const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === nameUpper);
       if (partyRow) {
         return getPartyGstin(partyName, partyRow.statePartyDetails);
       }
