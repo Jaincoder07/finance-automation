@@ -509,6 +509,70 @@ export default function FinanceApp() {
   const safeOpeningBalances = useMemo(() => (openingBalances && typeof openingBalances === 'object' && !Array.isArray(openingBalances)) ? openingBalances : {}, [openingBalances]);
 
   // ============================================
+  // STATE NORMALIZATION HELPER (for GST matching)
+  // ============================================
+  const normalizeStateName = useCallback((state) => {
+    if (!state) return '';
+    const s = state.toUpperCase().trim();
+    
+    // Common variations mapping
+    if (s.includes('MAHARASHTRA') || s === 'MH') return 'MAHARASHTRA';
+    if (s.includes('DELHI') || s === 'DL' || s.includes('NEW DELHI')) return 'DELHI';
+    if (s.includes('KARNATAKA') || s === 'KA' || s.includes('BANGALORE') || s.includes('BENGALURU')) return 'KARNATAKA';
+    if (s.includes('TAMIL') || s === 'TN' || s.includes('CHENNAI')) return 'TAMIL NADU';
+    if (s.includes('TELANGANA') || s === 'TG' || s === 'TS' || s.includes('HYDERABAD')) return 'TELANGANA';
+    if (s.includes('UTTAR PRADESH') || s === 'UP' || s.includes('NOIDA') || s.includes('LUCKNOW')) return 'UTTAR PRADESH';
+    if (s.includes('WEST BENGAL') || s === 'WB' || s.includes('KOLKATA')) return 'WEST BENGAL';
+    if (s.includes('GUJARAT') || s === 'GJ' || s.includes('AHMEDABAD')) return 'GUJARAT';
+    if (s.includes('RAJASTHAN') || s === 'RJ' || s.includes('JAIPUR')) return 'RAJASTHAN';
+    if (s.includes('PUNJAB') || s === 'PB') return 'PUNJAB';
+    if (s.includes('HARYANA') || s === 'HR' || s.includes('GURGAON') || s.includes('GURUGRAM')) return 'HARYANA';
+    if (s.includes('MADHYA PRADESH') || s === 'MP' || s.includes('BHOPAL')) return 'MADHYA PRADESH';
+    if (s.includes('ANDHRA') || s === 'AP') return 'ANDHRA PRADESH';
+    if (s.includes('KERALA') || s === 'KL') return 'KERALA';
+    if (s.includes('ODISHA') || s.includes('ORISSA') || s === 'OR' || s === 'OD') return 'ODISHA';
+    if (s.includes('BIHAR') || s === 'BR') return 'BIHAR';
+    if (s.includes('JHARKHAND') || s === 'JH') return 'JHARKHAND';
+    if (s.includes('ASSAM') || s === 'AS') return 'ASSAM';
+    if (s.includes('CHHATTISGARH') || s === 'CG') return 'CHHATTISGARH';
+    if (s.includes('GOA') || s === 'GA') return 'GOA';
+    if (s.includes('HIMACHAL') || s === 'HP') return 'HIMACHAL PRADESH';
+    if (s.includes('JAMMU') || s === 'JK') return 'JAMMU AND KASHMIR';
+    if (s.includes('UTTARAKHAND') || s.includes('UTTARANCHAL') || s === 'UK') return 'UTTARAKHAND';
+    if (s.includes('MUMBAI')) return 'MAHARASHTRA';
+    if (s.includes('CHANDIGARH')) return 'CHANDIGARH';
+    
+    return s;
+  }, []);
+
+  // Get party GSTIN by matching party name and state
+  const getPartyGstin = useCallback((partyName, stateDetails) => {
+    if (!partyName) return '';
+    const normalizedState = normalizeStateName(stateDetails);
+    
+    // Try composite key first
+    const compositeKey = `${partyName.trim()}|${normalizedState}`;
+    if (safePartyMaster[compositeKey]?.gstin) {
+      return safePartyMaster[compositeKey].gstin;
+    }
+    
+    // Fallback: search through all entries for matching party name and state
+    for (const key in safePartyMaster) {
+      const entry = safePartyMaster[key];
+      if (entry.partyName === partyName.trim() && entry.normalizedState === normalizedState) {
+        return entry.gstin || '';
+      }
+    }
+    
+    // Last fallback: try old format (just party name as key)
+    if (safePartyMaster[partyName.trim()]?.gstin) {
+      return safePartyMaster[partyName.trim()].gstin;
+    }
+    
+    return '';
+  }, [safePartyMaster, normalizeStateName]);
+
+  // ============================================
   // FIREBASE DATA PERSISTENCE
   // ============================================
   
@@ -1784,81 +1848,6 @@ Phone: ${companyConfig.phone}`;
     };
     reader.readAsBinaryString(file);
     e.target.value = '';
-  };
-
-  // Normalize state name for matching (handles spelling variations)
-  const normalizeStateName = (state) => {
-    if (!state) return '';
-    const s = state.toUpperCase().trim();
-    
-    // Common variations mapping
-    if (s.includes('MAHARASHTRA') || s === 'MH') return 'MAHARASHTRA';
-    if (s.includes('DELHI') || s === 'DL' || s.includes('NEW DELHI')) return 'DELHI';
-    if (s.includes('KARNATAKA') || s === 'KA' || s.includes('BANGALORE') || s.includes('BENGALURU')) return 'KARNATAKA';
-    if (s.includes('TAMIL') || s === 'TN' || s.includes('CHENNAI')) return 'TAMIL NADU';
-    if (s.includes('TELANGANA') || s === 'TG' || s === 'TS' || s.includes('HYDERABAD')) return 'TELANGANA';
-    if (s.includes('UTTAR PRADESH') || s === 'UP' || s.includes('NOIDA') || s.includes('LUCKNOW')) return 'UTTAR PRADESH';
-    if (s.includes('WEST BENGAL') || s === 'WB' || s.includes('KOLKATA')) return 'WEST BENGAL';
-    if (s.includes('GUJARAT') || s === 'GJ' || s.includes('AHMEDABAD')) return 'GUJARAT';
-    if (s.includes('RAJASTHAN') || s === 'RJ' || s.includes('JAIPUR')) return 'RAJASTHAN';
-    if (s.includes('PUNJAB') || s === 'PB') return 'PUNJAB';
-    if (s.includes('HARYANA') || s === 'HR' || s.includes('GURGAON') || s.includes('GURUGRAM')) return 'HARYANA';
-    if (s.includes('MADHYA PRADESH') || s === 'MP' || s.includes('BHOPAL')) return 'MADHYA PRADESH';
-    if (s.includes('ANDHRA') || s === 'AP') return 'ANDHRA PRADESH';
-    if (s.includes('KERALA') || s === 'KL') return 'KERALA';
-    if (s.includes('ODISHA') || s.includes('ORISSA') || s === 'OR' || s === 'OD') return 'ODISHA';
-    if (s.includes('BIHAR') || s === 'BR') return 'BIHAR';
-    if (s.includes('JHARKHAND') || s === 'JH') return 'JHARKHAND';
-    if (s.includes('ASSAM') || s === 'AS') return 'ASSAM';
-    if (s.includes('CHHATTISGARH') || s === 'CG') return 'CHHATTISGARH';
-    if (s.includes('GOA') || s === 'GA') return 'GOA';
-    if (s.includes('HIMACHAL') || s === 'HP') return 'HIMACHAL PRADESH';
-    if (s.includes('JAMMU') || s === 'JK') return 'JAMMU AND KASHMIR';
-    if (s.includes('UTTARAKHAND') || s.includes('UTTARANCHAL') || s === 'UK') return 'UTTARAKHAND';
-    if (s.includes('MUMBAI')) return 'MAHARASHTRA';
-    if (s.includes('CHANDIGARH')) return 'CHANDIGARH';
-    
-    return s;
-  };
-
-  // Get party GSTIN by matching party name and state
-  const getPartyGstin = (partyName, stateDetails) => {
-    if (!partyName) return '';
-    const normalizedState = normalizeStateName(stateDetails);
-    
-    // Try composite key first
-    const compositeKey = `${partyName.trim()}|${normalizedState}`;
-    if (safePartyMaster[compositeKey]?.gstin) {
-      return safePartyMaster[compositeKey].gstin;
-    }
-    
-    // Fallback: search through all entries for matching party name and state
-    for (const key in safePartyMaster) {
-      const entry = safePartyMaster[key];
-      if (entry.partyName === partyName.trim() && entry.normalizedState === normalizedState) {
-        return entry.gstin || '';
-      }
-    }
-    
-    // Last fallback: try old format (just party name as key)
-    if (safePartyMaster[partyName.trim()]?.gstin) {
-      return safePartyMaster[partyName.trim()].gstin;
-    }
-    
-    return '';
-  };
-
-  // Get party state from party master
-  const getPartyState = (partyName, stateDetails) => {
-    if (!partyName) return '';
-    const normalizedState = normalizeStateName(stateDetails);
-    
-    const compositeKey = `${partyName.trim()}|${normalizedState}`;
-    if (safePartyMaster[compositeKey]?.stateName) {
-      return safePartyMaster[compositeKey].stateName;
-    }
-    
-    return stateDetails || '';
   };
 
   // Download Party Master Template
