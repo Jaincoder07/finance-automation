@@ -1926,8 +1926,9 @@ Phone: ${companyConfig.phone}`;
       const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
       
       // Create a Set of existing campaign keys for duplicate checking
+      // Using: date, time, campaign name, and subject
       const existingKeys = new Set(
-        masterData.map(row => `${row.date}|${row.partyName}|${row.senderName}|${row.subject}`.toLowerCase())
+        safeMasterData.map(row => `${row.date}|${row.time || ''}|${row.campaignName || ''}|${row.subject}`.toLowerCase())
       );
       
       let duplicateCount = 0;
@@ -1941,11 +1942,12 @@ Phone: ${companyConfig.phone}`;
         const partyName = (row['PARTY NAME'] || row['Party Name'] || '').trim();
         const senderName = row['SENDER NAME'] || row['Sender Name'] || '';
         const subject = row['SUBJECT'] || row['Subject'] || '';
+        const time = row['TIME'] || row['Time'] || '';
         const defaultAmount = invoiceValues[partyName] || '';
         const dateStr = dateValue instanceof Date && !isNaN(dateValue) ? dateValue.toISOString().split('T')[0] : '';
         
-        // Create unique key for this campaign
-        const campaignKey = `${dateStr}|${partyName}|${senderName}|${subject}`.toLowerCase();
+        // Create unique key for this campaign using: date, time, campaign name, and subject
+        const campaignKey = `${dateStr}|${time}|${campaignName}|${subject}`.toLowerCase();
         
         // Check if this campaign already exists
         if (existingKeys.has(campaignKey)) {
@@ -2388,7 +2390,7 @@ ${companyConfig.email}`;
       }
     </style>
     <div style="border: 2px solid #000; background: white;">
-      <div style="text-align: center; padding: 12px; font-size: 18px; font-weight: bold; border-bottom: 2px solid #000; background: #f8f8f8;">Tax Invoice ${row.invoiceType === 'Combined' ? '<span style="display: inline-block; background: #7C3AED; color: white; padding: 3px 10px; border-radius: 5px; font-size: 11px; margin-left: 10px;">COMBINED</span>' : ''}</div>
+      <div style="text-align: center; padding: 12px; font-size: 18px; font-weight: bold; border-bottom: 2px solid #000; background: #f8f8f8;">Tax Invoice</div>
       <div style="text-align: center; font-size: 11px; font-style: italic; padding: 5px; border-bottom: 1px solid #000; background: #fafafa;">(Original for Recipient)</div>
       <div style="display: flex; border-bottom: 2px solid #000;">
         <div style="flex: 1.5; padding: 12px; border-right: 2px solid #000;">
@@ -2397,8 +2399,7 @@ ${companyConfig.email}`;
         </div>
         <div style="flex: 1; font-size: 12px;">
           <div style="display: flex; border-bottom: 1px solid #000;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Invoice No.</div><div style="flex: 1; padding: 8px; font-weight: 600; color: #1a5276;">${row.invoiceNo || ''}</div></div>
-          <div style="display: flex; border-bottom: 1px solid #000;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Dated</div><div style="flex: 1; padding: 8px;">${formatDate(row.invoiceDate || row.date)}</div></div>
-          ${row.invoiceType === 'Combined' ? '<div style="display: flex;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Combine Code</div><div style="flex: 1; padding: 8px; color: #7C3AED; font-weight: bold;">C' + row.combinationCode + '</div></div>' : ''}
+          <div style="display: flex;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Dated</div><div style="flex: 1; padding: 8px;">${formatDate(row.invoiceDate || row.date)}</div></div>
         </div>
       </div>
       <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
