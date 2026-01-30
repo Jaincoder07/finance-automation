@@ -353,7 +353,7 @@ export default function FinanceApp() {
   }, []);
 
   const [companyConfig, setCompanyConfig] = useState({
-    name: 'JAC FinMate',
+    name: 'Indreesh Media LLP',
     brand: 'JAC',
     address: 'A-1701 Sweet Home CHS LTD, SVP, Plot No: 24',
     addressLine2: 'Andheri West, Nr Last Bus St',
@@ -370,7 +370,7 @@ export default function FinanceApp() {
       account: '921020009075531',
       branch: 'Andheri',
       ifsc: 'UTIB0000020',
-      holder: 'JAC FinMate'
+      holder: 'Indreesh Media LLP'
     },
     invoicePrefix: 'MB/2025-26/',
     hsnCode: '998365',
@@ -670,7 +670,7 @@ export default function FinanceApp() {
       alert('Please enter phone number and API key first');
       return;
     }
-    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from JAC FinMate. WhatsApp notifications are working!');
+    sendSingleWhatsApp(phone, apiKey, 'info', 'Test notification from Indreesh Media LLP. WhatsApp notifications are working!');
     alert('Test message sent! Check your WhatsApp.');
   };
   
