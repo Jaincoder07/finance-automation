@@ -538,7 +538,13 @@ export default function FinanceApp() {
         
         // Other types
         if (data.mailerLogo) setMailerLogo(data.mailerLogo);
-        if (data.companyConfig) setCompanyConfig(prev => ({ ...prev, ...data.companyConfig }));
+        if (data.companyConfig) setCompanyConfig(prev => ({ 
+          ...prev, 
+          ...data.companyConfig,
+          // Always use hardcoded company name and bank holder (not from Firebase)
+          name: 'Indreesh Media LLP',
+          bank: { ...(data.companyConfig.bank || prev.bank), holder: 'Indreesh Media LLP' }
+        }));
         if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
         if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
         if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
@@ -865,7 +871,13 @@ export default function FinanceApp() {
       
       // Other types
       if (data.mailerLogo) setMailerLogo(data.mailerLogo);
-      if (data.companyConfig) setCompanyConfig(prev => ({ ...prev, ...data.companyConfig }));
+      if (data.companyConfig) setCompanyConfig(prev => ({ 
+        ...prev, 
+        ...data.companyConfig,
+        // Always use hardcoded company name and bank holder (not from Firebase)
+        name: 'Indreesh Media LLP',
+        bank: { ...(data.companyConfig.bank || prev.bank), holder: 'Indreesh Media LLP' }
+      }));
       if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
       if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
       if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
