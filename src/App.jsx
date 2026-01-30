@@ -1010,13 +1010,77 @@ export default function FinanceApp() {
     const partyList = [];
     const addedKeys = new Set(); // Using UPPERCASE keys for case-insensitive matching
     
+    // Inline state normalization to avoid dependency on useCallback
+    const normalizeState = (state) => {
+      if (!state) return '';
+      const s = state.toUpperCase().trim();
+      if (s.includes('MAHARASHTRA') || s === 'MH' || s.includes('MUMBAI')) return 'MAHARASHTRA';
+      if (s.includes('DELHI') || s === 'DL' || s.includes('NEW DELHI')) return 'DELHI';
+      if (s.includes('KARNATAKA') || s === 'KA' || s.includes('BANGALORE') || s.includes('BENGALURU')) return 'KARNATAKA';
+      if (s.includes('TAMIL') || s === 'TN' || s.includes('CHENNAI')) return 'TAMIL NADU';
+      if (s.includes('TELANGANA') || s === 'TG' || s === 'TS' || s.includes('HYDERABAD')) return 'TELANGANA';
+      if (s.includes('UTTAR PRADESH') || s === 'UP' || s.includes('NOIDA') || s.includes('LUCKNOW')) return 'UTTAR PRADESH';
+      if (s.includes('WEST BENGAL') || s === 'WB' || s.includes('KOLKATA')) return 'WEST BENGAL';
+      if (s.includes('GUJARAT') || s === 'GJ' || s.includes('AHMEDABAD')) return 'GUJARAT';
+      if (s.includes('RAJASTHAN') || s === 'RJ' || s.includes('JAIPUR')) return 'RAJASTHAN';
+      if (s.includes('PUNJAB') || s === 'PB') return 'PUNJAB';
+      if (s.includes('HARYANA') || s === 'HR' || s.includes('GURGAON') || s.includes('GURUGRAM')) return 'HARYANA';
+      if (s.includes('MADHYA PRADESH') || s === 'MP' || s.includes('BHOPAL')) return 'MADHYA PRADESH';
+      if (s.includes('ANDHRA') || s === 'AP') return 'ANDHRA PRADESH';
+      if (s.includes('KERALA') || s === 'KL') return 'KERALA';
+      if (s.includes('ODISHA') || s.includes('ORISSA') || s === 'OR' || s === 'OD') return 'ODISHA';
+      if (s.includes('BIHAR') || s === 'BR') return 'BIHAR';
+      if (s.includes('JHARKHAND') || s === 'JH') return 'JHARKHAND';
+      if (s.includes('ASSAM') || s === 'AS') return 'ASSAM';
+      if (s.includes('CHHATTISGARH') || s === 'CG') return 'CHHATTISGARH';
+      if (s.includes('GOA') || s === 'GA') return 'GOA';
+      if (s.includes('HIMACHAL') || s === 'HP') return 'HIMACHAL PRADESH';
+      if (s.includes('JAMMU') || s === 'JK') return 'JAMMU AND KASHMIR';
+      if (s.includes('UTTARAKHAND') || s.includes('UTTARANCHAL') || s === 'UK') return 'UTTARAKHAND';
+      if (s.includes('CHANDIGARH')) return 'CHANDIGARH';
+      return s;
+    };
+    
     // Helper to create case-insensitive key
     const makeKey = (name, state) => `${(name || '').trim().toUpperCase()}|${state}`;
+    
+    // Helper to get GSTIN from party master (inline to avoid dependency)
+    const findGstin = (partyName, stateDetails) => {
+      if (!partyName) return '';
+      const partyNameUpper = partyName.trim().toUpperCase();
+      const normalizedState = normalizeState(stateDetails);
+      
+      // Try composite key
+      const compositeKey = `${partyNameUpper}|${normalizedState}`;
+      if (safePartyMaster[compositeKey]?.gstin) {
+        return safePartyMaster[compositeKey].gstin;
+      }
+      
+      // Search through all entries
+      for (const key in safePartyMaster) {
+        const entry = safePartyMaster[key];
+        const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+        if (entryNameUpper === partyNameUpper && entry.normalizedState === normalizedState) {
+          return entry.gstin || '';
+        }
+      }
+      
+      // Try matching just by party name
+      for (const key in safePartyMaster) {
+        const entry = safePartyMaster[key];
+        const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+        if (entryNameUpper === partyNameUpper && entry.gstin) {
+          return entry.gstin;
+        }
+      }
+      
+      return '';
+    };
     
     // FIRST: Add ALL entries from Party Master (this is the primary source)
     Object.entries(safePartyMaster).forEach(([key, entry]) => {
       if (entry.partyName) {
-        const normalizedState = entry.normalizedState || normalizeStateName(entry.stateName);
+        const normalizedState = entry.normalizedState || normalizeState(entry.stateName);
         const partyKey = makeKey(entry.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
@@ -1035,12 +1099,12 @@ export default function FinanceApp() {
     // SECOND: Add from masterData (if not already added from Party Master)
     safeMasterData.forEach(r => {
       if (r.partyName) {
-        const normalizedState = normalizeStateName(r.statePartyDetails);
+        const normalizedState = normalizeState(r.statePartyDetails);
         const partyKey = makeKey(r.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
           // Try to find GSTIN from party master (case-insensitive)
-          const gstin = getPartyGstin(r.partyName, r.statePartyDetails);
+          const gstin = findGstin(r.partyName, r.statePartyDetails);
           partyList.push({
             partyName: r.partyName,
             partyNameUpper: r.partyName.trim().toUpperCase(),
@@ -1056,11 +1120,11 @@ export default function FinanceApp() {
     // THIRD: Add from ledgerEntries
     safeLedgerEntries.forEach(e => {
       if (e.partyName) {
-        const normalizedState = normalizeStateName(e.state || e.statePartyDetails || '');
+        const normalizedState = normalizeState(e.state || e.statePartyDetails || '');
         const partyKey = makeKey(e.partyName, normalizedState);
         if (!addedKeys.has(partyKey)) {
           addedKeys.add(partyKey);
-          const gstin = getPartyGstin(e.partyName, e.state || e.statePartyDetails);
+          const gstin = findGstin(e.partyName, e.state || e.statePartyDetails);
           partyList.push({
             partyName: e.partyName,
             partyNameUpper: e.partyName.trim().toUpperCase(),
@@ -1089,7 +1153,7 @@ export default function FinanceApp() {
     });
     
     return partyList.sort((a, b) => a.partyName.localeCompare(b.partyName));
-  }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances, getPartyGstin, normalizeStateName]);
+  }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances]);
 
   const combinationCodes = useMemo(() => {
     const codes = [...new Set(safeMasterData.filter(r => r.combinationCode && r.combinationCode !== 'NA').map(r => r.combinationCode))];
