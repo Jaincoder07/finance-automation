@@ -971,79 +971,109 @@ export default function FinanceApp() {
   // COMPUTED VALUES
   // ============================================
   
+  // All unique party names (for dropdowns that just need names)
   const parties = useMemo(() => {
-    // Combine parties from: masterData, partyMaster, ledgerEntries, openingBalances
-    const masterParties = safeMasterData.map(r => r.partyName);
+    const partySet = new Set();
     
-    // Extract party names from composite keys (partyName|state format)
-    const partyMasterParties = Object.values(safePartyMaster)
-      .map(entry => entry.partyName || '')
-      .filter(Boolean);
-    
-    // Fallback for old format keys (just party name)
-    const partyMasterKeys = Object.keys(safePartyMaster)
-      .filter(key => !key.includes('|'))
-      .map(key => key);
-    
-    const ledgerParties = safeLedgerEntries.map(e => e.partyName);
-    const openingBalanceParties = Object.keys(safeOpeningBalances);
-    
-    const allParties = [...masterParties, ...partyMasterParties, ...partyMasterKeys, ...ledgerParties, ...openingBalanceParties];
-    const uniqueParties = [...new Set(allParties)];
-    return uniqueParties.filter(Boolean).sort();
-  }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances]);
-
-  // Parties with state info for ledger dropdown
-  const partiesWithState = useMemo(() => {
-    const partyStateMap = new Map();
-    
-    // From masterData - get party + state combinations
+    // From masterData
     safeMasterData.forEach(r => {
-      if (r.partyName) {
-        const state = normalizeStateName(r.statePartyDetails);
-        const key = `${r.partyName}|${state}`;
-        if (!partyStateMap.has(key)) {
-          partyStateMap.set(key, {
-            partyName: r.partyName,
-            state: r.statePartyDetails || state || '',
-            normalizedState: state,
-            displayName: state ? `${r.partyName} (${r.statePartyDetails || state})` : r.partyName
-          });
-        }
-      }
+      if (r.partyName) partySet.add(r.partyName);
+    });
+    
+    // From partyMaster - extract party names from entries
+    Object.values(safePartyMaster).forEach(entry => {
+      if (entry.partyName) partySet.add(entry.partyName);
     });
     
     // From ledgerEntries
     safeLedgerEntries.forEach(e => {
-      if (e.partyName) {
-        const state = normalizeStateName(e.state || e.statePartyDetails || '');
-        const key = `${e.partyName}|${state}`;
-        if (!partyStateMap.has(key)) {
-          partyStateMap.set(key, {
-            partyName: e.partyName,
-            state: e.state || e.statePartyDetails || '',
-            normalizedState: state,
-            displayName: state ? `${e.partyName} (${e.state || e.statePartyDetails})` : e.partyName
+      if (e.partyName) partySet.add(e.partyName);
+    });
+    
+    // From openingBalances
+    Object.keys(safeOpeningBalances).forEach(name => {
+      if (name) partySet.add(name);
+    });
+    
+    return Array.from(partySet).filter(Boolean).sort();
+  }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances]);
+
+  // Parties with state info for ledger - includes ALL from Party Master
+  const partiesForLedger = useMemo(() => {
+    const partyList = [];
+    const addedKeys = new Set();
+    
+    // FIRST: Add ALL entries from Party Master (this is the primary source)
+    Object.entries(safePartyMaster).forEach(([key, entry]) => {
+      if (entry.partyName) {
+        const partyKey = `${entry.partyName}|${entry.normalizedState || normalizeStateName(entry.stateName)}`;
+        if (!addedKeys.has(partyKey)) {
+          addedKeys.add(partyKey);
+          partyList.push({
+            partyName: entry.partyName,
+            state: entry.stateName || '',
+            normalizedState: entry.normalizedState || normalizeStateName(entry.stateName),
+            gstin: entry.gstin || '',
+            fromPartyMaster: true
           });
         }
       }
     });
     
-    // From opening balances (just party name, no state)
+    // SECOND: Add from masterData (if not already added from Party Master)
+    safeMasterData.forEach(r => {
+      if (r.partyName) {
+        const normalizedState = normalizeStateName(r.statePartyDetails);
+        const partyKey = `${r.partyName}|${normalizedState}`;
+        if (!addedKeys.has(partyKey)) {
+          addedKeys.add(partyKey);
+          // Try to find GSTIN from party master
+          const gstin = getPartyGstin(r.partyName, r.statePartyDetails);
+          partyList.push({
+            partyName: r.partyName,
+            state: r.statePartyDetails || '',
+            normalizedState: normalizedState,
+            gstin: gstin,
+            fromPartyMaster: false
+          });
+        }
+      }
+    });
+    
+    // THIRD: Add from ledgerEntries
+    safeLedgerEntries.forEach(e => {
+      if (e.partyName) {
+        const normalizedState = normalizeStateName(e.state || e.statePartyDetails || '');
+        const partyKey = `${e.partyName}|${normalizedState}`;
+        if (!addedKeys.has(partyKey)) {
+          addedKeys.add(partyKey);
+          const gstin = getPartyGstin(e.partyName, e.state || e.statePartyDetails);
+          partyList.push({
+            partyName: e.partyName,
+            state: e.state || e.statePartyDetails || '',
+            normalizedState: normalizedState,
+            gstin: gstin,
+            fromPartyMaster: false
+          });
+        }
+      }
+    });
+    
+    // FOURTH: Add from opening balances (if not already present)
     Object.keys(safeOpeningBalances).forEach(partyName => {
-      const key = `${partyName}|`;
-      if (!partyStateMap.has(key) && !Array.from(partyStateMap.keys()).some(k => k.startsWith(partyName + '|'))) {
-        partyStateMap.set(key, {
+      if (partyName && !Array.from(addedKeys).some(k => k.startsWith(partyName + '|'))) {
+        partyList.push({
           partyName: partyName,
           state: '',
           normalizedState: '',
-          displayName: partyName
+          gstin: '',
+          fromPartyMaster: false
         });
       }
     });
     
-    return Array.from(partyStateMap.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
-  }, [safeMasterData, safeLedgerEntries, safeOpeningBalances]);
+    return partyList.sort((a, b) => a.partyName.localeCompare(b.partyName));
+  }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances, getPartyGstin, normalizeStateName]);
 
   const combinationCodes = useMemo(() => {
     const codes = [...new Set(safeMasterData.filter(r => r.combinationCode && r.combinationCode !== 'NA').map(r => r.combinationCode))];
@@ -3971,11 +4001,12 @@ ${generateInvoiceHtml(row)}
       return sum;
     }, 0);
     
-    // Get party address and GSTIN
+    // Get party address and GSTIN from partiesForLedger (includes Party Master data)
+    const partyInfo = partiesForLedger.find(p => p.partyName === selectedParty) || {};
     const partyRow = masterData.find(r => r.partyName === selectedParty);
-    const partyAddress = partyRow?.statePartyDetails || '';
-    // Use the new getPartyGstin function to match party + state
-    const partyGstin = getPartyGstin(selectedParty, partyAddress);
+    const partyAddress = partyRow?.statePartyDetails || partyInfo.state || '';
+    // Get GSTIN - first try partiesForLedger, then fallback to getPartyGstin
+    const partyGstin = partyInfo.gstin || getPartyGstin(selectedParty, partyAddress);
     
     const html = `
 <!DOCTYPE html>
@@ -4226,18 +4257,31 @@ ${generateInvoiceHtml(row)}
     };
     
     // Filter parties by search (search in party name and state)
-    const filteredParties = parties.filter(party => 
-      party.toLowerCase().includes(ledgerPartySearch.toLowerCase())
+    const filteredParties = partiesForLedger.filter(p => 
+      p.partyName.toLowerCase().includes(ledgerPartySearch.toLowerCase()) ||
+      (p.state && p.state.toLowerCase().includes(ledgerPartySearch.toLowerCase()))
     );
     
-    // Get party address from masterData
-    const getPartyAddress = (partyName) => {
-      const partyRow = masterData.find(r => r.partyName === partyName);
-      return partyRow?.statePartyDetails || '';
+    // Get party info from partiesForLedger
+    const getPartyInfo = (partyName) => {
+      return partiesForLedger.find(p => p.partyName === partyName) || { state: '', gstin: '' };
     };
     
-    // Get party GSTIN for selected party (based on their state in masterData)
+    // Get party address from masterData or partiesForLedger
+    const getPartyAddress = (partyName) => {
+      const partyRow = masterData.find(r => r.partyName === partyName);
+      if (partyRow?.statePartyDetails) return partyRow.statePartyDetails;
+      const partyInfo = partiesForLedger.find(p => p.partyName === partyName);
+      return partyInfo?.state || '';
+    };
+    
+    // Get party GSTIN for selected party
     const getSelectedPartyGstin = (partyName) => {
+      // First try from partiesForLedger (includes Party Master data)
+      const partyInfo = partiesForLedger.find(p => p.partyName === partyName);
+      if (partyInfo?.gstin) return partyInfo.gstin;
+      
+      // Fallback: try matching with state from masterData
       const partyRow = masterData.find(r => r.partyName === partyName);
       if (partyRow) {
         return getPartyGstin(partyName, partyRow.statePartyDetails);
@@ -4687,13 +4731,13 @@ ${generateInvoiceHtml(row)}
             </div>
             <div style={{ maxHeight: '450px', overflowY: 'auto' }}>
               {filteredParties.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>{ledgerPartySearch ? 'No matching parties' : 'No parties yet'}</div> : (
-                filteredParties.map(party => {
-                  const balance = getPartyBalance(party);
-                  const partyState = getPartyAddress(party);
+                filteredParties.map((partyInfo, idx) => {
+                  const balance = getPartyBalance(partyInfo.partyName);
                   return (
-                    <div key={party} onClick={() => setSelectedParty(party)} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: selectedParty === party ? '#EFF6FF' : 'transparent', borderLeft: selectedParty === party ? '4px solid #2874A6' : '4px solid transparent' }}>
-                      <div style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{party}</div>
-                      {partyState && <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>📍 {partyState}</div>}
+                    <div key={`${partyInfo.partyName}-${partyInfo.state}-${idx}`} onClick={() => setSelectedParty(partyInfo.partyName)} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: selectedParty === partyInfo.partyName ? '#EFF6FF' : 'transparent', borderLeft: selectedParty === partyInfo.partyName ? '4px solid #2874A6' : '4px solid transparent' }}>
+                      <div style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{partyInfo.partyName}</div>
+                      {partyInfo.state && <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>📍 {partyInfo.state}</div>}
+                      {partyInfo.gstin && <div style={{ fontSize: '10px', color: '#2874A6', marginTop: '1px' }}>GST: {partyInfo.gstin}</div>}
                       <div style={{ fontSize: '14px', color: balance > 0 ? '#DC2626' : '#059669', fontWeight: '700', marginTop: '4px' }}>{balance > 0 ? 'Dr. ' : 'Cr. '}{formatCurrency(Math.abs(balance))}</div>
                     </div>
                   );
