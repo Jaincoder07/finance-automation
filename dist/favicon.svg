@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" fill="white"/>
+  <!-- Green arrow -->
+  <path d="M20 45 L45 15 L45 30 L55 30 L30 55 L30 45 Z" fill="#6B8E23"/>
+  <!-- JAC text -->
+  <text x="50" y="80" font-family="Arial Black, Arial, sans-serif" font-size="36" font-weight="900" fill="#1E3A5F" text-anchor="middle">JAC</text>
+</svg>
