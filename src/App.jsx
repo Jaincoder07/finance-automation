@@ -1016,7 +1016,8 @@ export default function FinanceApp() {
   // Parties with state info for ledger - includes ALL from Party Master (CASE-INSENSITIVE)
   const partiesForLedger = useMemo(() => {
     const partyList = [];
-    const addedKeys = new Set(); // Using UPPERCASE keys for case-insensitive matching
+    const addedNameStateKeys = new Set(); // partyName|state keys for Party Master multi-state dedup
+    const addedNameKeys = new Set(); // Just party name keys for cross-source dedup
     
     // Inline state normalization to avoid dependency on useCallback
     const normalizeState = (state) => {
@@ -1049,52 +1050,20 @@ export default function FinanceApp() {
       return s;
     };
     
-    // Helper to create case-insensitive key
-    const makeKey = (name, state) => `${(name || '').trim().toUpperCase()}|${state}`;
-    
-    // Helper to get GSTIN from party master (inline to avoid dependency)
-    const findGstin = (partyName, stateDetails) => {
-      if (!partyName) return '';
-      const partyNameUpper = partyName.trim().toUpperCase();
-      const normalizedState = normalizeState(stateDetails);
-      
-      // Try composite key
-      const compositeKey = `${partyNameUpper}|${normalizedState}`;
-      if (safePartyMaster[compositeKey]?.gstin) {
-        return safePartyMaster[compositeKey].gstin;
-      }
-      
-      // Search through all entries
-      for (const key in safePartyMaster) {
-        const entry = safePartyMaster[key];
-        const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
-        if (entryNameUpper === partyNameUpper && entry.normalizedState === normalizedState) {
-          return entry.gstin || '';
-        }
-      }
-      
-      // Try matching just by party name
-      for (const key in safePartyMaster) {
-        const entry = safePartyMaster[key];
-        const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
-        if (entryNameUpper === partyNameUpper && entry.gstin) {
-          return entry.gstin;
-        }
-      }
-      
-      return '';
-    };
-    
     // FIRST: Add ALL entries from Party Master (this is the primary source)
+    // Party Master CAN have same party with different states (different GST registrations)
     Object.entries(safePartyMaster).forEach(([key, entry]) => {
       if (entry.partyName) {
         const normalizedState = entry.normalizedState || normalizeState(entry.stateName);
-        const partyKey = makeKey(entry.partyName, normalizedState);
-        if (!addedKeys.has(partyKey)) {
-          addedKeys.add(partyKey);
+        const nameUpper = entry.partyName.trim().toUpperCase();
+        const nameStateKey = `${nameUpper}|${normalizedState}`;
+        
+        if (!addedNameStateKeys.has(nameStateKey)) {
+          addedNameStateKeys.add(nameStateKey);
+          addedNameKeys.add(nameUpper); // Track that this party name exists
           partyList.push({
-            partyName: entry.partyName, // Keep original case for display
-            partyNameUpper: entry.partyName.trim().toUpperCase(),
+            partyName: entry.partyName,
+            partyNameUpper: nameUpper,
             state: entry.stateName || '',
             normalizedState: normalizedState,
             gstin: entry.gstin || '',
@@ -1104,54 +1073,53 @@ export default function FinanceApp() {
       }
     });
     
-    // SECOND: Add from masterData (if not already added from Party Master)
+    // SECOND: Add from masterData - ONLY if party name doesn't already exist from Party Master
     safeMasterData.forEach(r => {
       if (r.partyName) {
-        const normalizedState = normalizeState(r.statePartyDetails);
-        const partyKey = makeKey(r.partyName, normalizedState);
-        if (!addedKeys.has(partyKey)) {
-          addedKeys.add(partyKey);
-          // Try to find GSTIN from party master (case-insensitive)
-          const gstin = findGstin(r.partyName, r.statePartyDetails);
+        const nameUpper = r.partyName.trim().toUpperCase();
+        // Skip if this party name already exists (from Party Master or earlier masterData row)
+        if (!addedNameKeys.has(nameUpper)) {
+          addedNameKeys.add(nameUpper);
+          const normalizedState = normalizeState(r.statePartyDetails);
           partyList.push({
             partyName: r.partyName,
-            partyNameUpper: r.partyName.trim().toUpperCase(),
+            partyNameUpper: nameUpper,
             state: r.statePartyDetails || '',
             normalizedState: normalizedState,
-            gstin: gstin,
+            gstin: '', // Will be looked up dynamically
             fromPartyMaster: false
           });
         }
       }
     });
     
-    // THIRD: Add from ledgerEntries
+    // THIRD: Add from ledgerEntries - ONLY if party name doesn't already exist
     safeLedgerEntries.forEach(e => {
       if (e.partyName) {
-        const normalizedState = normalizeState(e.state || e.statePartyDetails || '');
-        const partyKey = makeKey(e.partyName, normalizedState);
-        if (!addedKeys.has(partyKey)) {
-          addedKeys.add(partyKey);
-          const gstin = findGstin(e.partyName, e.state || e.statePartyDetails);
+        const nameUpper = e.partyName.trim().toUpperCase();
+        if (!addedNameKeys.has(nameUpper)) {
+          addedNameKeys.add(nameUpper);
+          const normalizedState = normalizeState(e.state || e.statePartyDetails || '');
           partyList.push({
             partyName: e.partyName,
-            partyNameUpper: e.partyName.trim().toUpperCase(),
+            partyNameUpper: nameUpper,
             state: e.state || e.statePartyDetails || '',
             normalizedState: normalizedState,
-            gstin: gstin,
+            gstin: '',
             fromPartyMaster: false
           });
         }
       }
     });
     
-    // FOURTH: Add from opening balances (if not already present)
+    // FOURTH: Add from opening balances - ONLY if party name doesn't already exist
     Object.keys(safeOpeningBalances).forEach(partyName => {
-      const partyKeyPrefix = partyName.trim().toUpperCase() + '|';
-      if (partyName && !Array.from(addedKeys).some(k => k.startsWith(partyKeyPrefix))) {
+      const nameUpper = partyName.trim().toUpperCase();
+      if (partyName && !addedNameKeys.has(nameUpper)) {
+        addedNameKeys.add(nameUpper);
         partyList.push({
           partyName: partyName,
-          partyNameUpper: partyName.trim().toUpperCase(),
+          partyNameUpper: nameUpper,
           state: '',
           normalizedState: '',
           gstin: '',
