@@ -509,6 +509,14 @@ export default function FinanceApp() {
   const safeOpeningBalances = useMemo(() => (openingBalances && typeof openingBalances === 'object' && !Array.isArray(openingBalances)) ? openingBalances : {}, [openingBalances]);
 
   // ============================================
+  // CASE-INSENSITIVE PARTY NAME MATCHING
+  // ============================================
+  const matchParty = (name1, name2) => {
+    if (!name1 || !name2) return false;
+    return name1.trim().toUpperCase() === name2.trim().toUpperCase();
+  };
+
+  // ============================================
   // STATE NORMALIZATION HELPER (for GST matching)
   // ============================================
   const normalizeStateName = useCallback((state) => {
@@ -1208,7 +1216,7 @@ export default function FinanceApp() {
     const openingBal = safeOpeningBalances[selectedParty] || 0;
     let balance = openingBal;
     const entries = safeLedgerEntries
-      .filter(e => e.partyName === selectedParty)
+      .filter(e => matchParty(e.partyName, selectedParty))
       .sort((a, b) => new Date(a.date) - new Date(b.date))
       .map(entry => {
         balance = balance + entry.debit - entry.credit;
@@ -1225,7 +1233,7 @@ export default function FinanceApp() {
 
   const getUnbilledCampaignsForParty = (partyName) => {
     return safeMasterData.filter(r => 
-      r.partyName === partyName && 
+      matchParty(r.partyName, partyName) && 
       r.toBeBilled === 'Yes' && 
       !r.invoiceGenerated &&
       r.invoiceAmount
@@ -1784,8 +1792,8 @@ export default function FinanceApp() {
     if (!selectedParty) return;
     if (!confirm(`Delete ALL historical entries for "${selectedParty}"?\n\nThis will remove all imported historical data for this party.`)) return;
     
-    const count = ledgerEntries.filter(e => e.partyName === selectedParty && e.isHistorical).length;
-    setLedgerEntries(prev => prev.filter(e => !(e.partyName === selectedParty && e.isHistorical)));
+    const count = ledgerEntries.filter(e => matchParty(e.partyName, selectedParty) && e.isHistorical).length;
+    setLedgerEntries(prev => prev.filter(e => !(matchParty(e.partyName, selectedParty) && e.isHistorical)));
     alert(`✅ ${count} historical entries deleted for ${selectedParty}.`);
   };
 
@@ -3432,7 +3440,7 @@ ${generateInvoiceHtml(row)}
     // Apply filters
     let invoices = Array.from(invoiceMap.values());
     if (invoiceFilters.party) {
-      invoices = invoices.filter(inv => inv.partyName === invoiceFilters.party);
+      invoices = invoices.filter(inv => matchParty(inv.partyName, invoiceFilters.party));
     }
     if (invoiceFilters.invoiceStatus) {
       invoices = invoices.filter(inv => inv.invoiceStatus === invoiceFilters.invoiceStatus);
@@ -3798,9 +3806,9 @@ ${generateInvoiceHtml(row)}
     // Use the same buildDetailedLedger logic
     const opening = openingBalances[selectedParty] || 0;
     
-    // Get all invoices from masterData
+    // Get all invoices from masterData (case-insensitive)
     const partyInvoices = masterData.filter(r => 
-      r.partyName === selectedParty && 
+      matchParty(r.partyName, selectedParty) && 
       r.invoiceGenerated && 
       r.invoiceStatus === 'Approved'
     );
@@ -3819,18 +3827,18 @@ ${generateInvoiceHtml(row)}
       }
     });
     
-    // Get historical entries (excluding CNs)
+    // Get historical entries (excluding CNs) - case-insensitive
     const historicalInvoices = ledgerEntries.filter(e => 
-      e.partyName === selectedParty && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+      matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
     );
     
-    // Get historical CNs
+    // Get historical CNs - case-insensitive
     const historicalCNs = ledgerEntries.filter(e => 
-      e.partyName === selectedParty && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+      matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
     );
     
-    const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
-    const systemCNs = creditNotes.filter(cn => cn.partyName === selectedParty);
+    const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty));
+    const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty));
     
     // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272" or "CN/2022-23/272")
     const getInvoiceYearSuffix = (vchNo) => {
@@ -4223,12 +4231,11 @@ ${generateInvoiceHtml(row)}
   const renderLedgers = () => {
     // Calculate closing balance as sum of individual invoice balances (CASE-INSENSITIVE)
     const getPartyBalance = (party) => {
-      const partyUpper = (party || '').trim().toUpperCase();
       const opening = openingBalances[party] || 0;
       
       // Get all invoices for this party (case-insensitive)
       const partyInvoices = masterData.filter(r => 
-        r.partyName?.trim().toUpperCase() === partyUpper && 
+        matchParty(r.partyName, party) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved'
       );
@@ -4248,17 +4255,17 @@ ${generateInvoiceHtml(row)}
       });
       
       // Get receipts and credit notes for this party (case-insensitive)
-      const partyReceipts = receipts.filter(r => r.partyName?.trim().toUpperCase() === partyUpper);
-      const partyCreditNotes = creditNotes.filter(cn => cn.partyName?.trim().toUpperCase() === partyUpper);
+      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party));
+      const partyCreditNotes = creditNotes.filter(cn => matchParty(cn.partyName, party));
       
       // Historical invoices (case-insensitive)
       const historicalInvoices = ledgerEntries.filter(e => 
-        e.partyName?.trim().toUpperCase() === partyUpper && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+        matchParty(e.partyName, party) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
       );
       
       // Historical CNs (case-insensitive)
       const historicalCNs = ledgerEntries.filter(e => 
-        e.partyName?.trim().toUpperCase() === partyUpper && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+        matchParty(e.partyName, party) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
       
       // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
@@ -4393,9 +4400,9 @@ ${generateInvoiceHtml(row)}
         return parts[parts.length - 1];
       };
       
-      // Get all invoices for this party from masterData (new system)
+      // Get all invoices for this party from masterData (case-insensitive)
       const partyInvoices = masterData.filter(r => 
-        r.partyName === selectedParty && 
+        matchParty(r.partyName, selectedParty) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved'
       );
@@ -4421,21 +4428,21 @@ ${generateInvoiceHtml(row)}
         }
       });
       
-      // Get historical entries for this party (excluding CN type - they'll be matched separately)
+      // Get historical entries for this party (case-insensitive)
       const historicalInvoices = ledgerEntries.filter(e => 
-        e.partyName === selectedParty && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
+        matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
       );
       
-      // Get historical credit notes
+      // Get historical credit notes (case-insensitive)
       const historicalCNs = ledgerEntries.filter(e => 
-        e.partyName === selectedParty && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+        matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
       );
       
-      // Get receipts for this party
-      const partyReceipts = receipts.filter(r => r.partyName === selectedParty);
+      // Get receipts for this party (case-insensitive)
+      const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty));
       
-      // Get credit notes from creditNotes state only (not ledgerEntries to avoid duplicates)
-      const systemCNs = creditNotes.filter(cn => cn.partyName === selectedParty);
+      // Get credit notes from creditNotes state only (case-insensitive)
+      const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty));
       
       // Create a map of ALL credit notes by year+suffix (combine system + historical)
       const creditNoteByYearSuffix = new Map();
@@ -4763,7 +4770,7 @@ ${generateInvoiceHtml(row)}
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
             {canEdit && <ActionButton icon={Upload} label="Import Historical" variant="brand" onClick={() => setShowHistoricalLedgerModal(true)} />}
-            {canEdit && selectedParty && ledgerEntries.some(e => e.partyName === selectedParty && e.isHistorical) && (
+            {canEdit && selectedParty && ledgerEntries.some(e => matchParty(e.partyName, selectedParty) && e.isHistorical) && (
               <ActionButton icon={Trash2} label="Clear Historical" variant="danger" onClick={handleClearHistoricalForParty} />
             )}
             {canEdit && <ActionButton icon={Plus} label="Opening Balance" variant="primary" onClick={() => setShowOpeningBalanceModal(true)} />}
