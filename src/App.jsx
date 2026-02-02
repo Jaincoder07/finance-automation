@@ -385,6 +385,7 @@ export default function FinanceApp() {
   const [receipts, setReceipts] = useState([]);
   const [creditNotes, setCreditNotes] = useState([]);
   const [selectedParty, setSelectedParty] = useState(null);
+  const [selectedPartyState, setSelectedPartyState] = useState(null); // Normalized state for multi-state party filtering
   const [nextInvoiceNo, setNextInvoiceNo] = useState(1);
   const [nextCombineNo, setNextCombineNo] = useState(1);
   const [nextReceiptNo, setNextReceiptNo] = useState(1);
@@ -514,6 +515,17 @@ export default function FinanceApp() {
   const matchParty = (name1, name2) => {
     if (!name1 || !name2) return false;
     return name1.trim().toUpperCase() === name2.trim().toUpperCase();
+  };
+
+  // Match party by name AND state (for multi-state party ledgers)
+  // If selectedState is null/empty, match by name only (backward compat)
+  const matchPartyForLedger = (rowPartyName, rowState, selPartyName, selNormalizedState) => {
+    if (!matchParty(rowPartyName, selPartyName)) return false;
+    // If no state filter selected, match all
+    if (!selNormalizedState) return true;
+    // Normalize the row's state and compare
+    const rowNormalized = normalizeStateName(rowState);
+    return rowNormalized === selNormalizedState;
   };
 
   // ============================================
@@ -2260,6 +2272,7 @@ Phone: ${companyConfig.phone}`;
     setNextReceiptNo(1);
     setNextCreditNoteNo(1);
     setSelectedParty(null);
+    setSelectedPartyState(null);
     setExpandedParties(new Set());
     setFollowups([]);
     setPartyMaster({});
@@ -3774,11 +3787,12 @@ ${generateInvoiceHtml(row)}
     // Use the same buildDetailedLedger logic
     const opening = openingBalances[selectedParty] || 0;
     
-    // Get all invoices from masterData (case-insensitive)
+    // Get all invoices from masterData (STATE-AWARE)
     const partyInvoices = masterData.filter(r => 
       matchParty(r.partyName, selectedParty) && 
       r.invoiceGenerated && 
-      r.invoiceStatus === 'Approved'
+      r.invoiceStatus === 'Approved' &&
+      (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
     );
     
     const invoiceMap = new Map();
@@ -3795,18 +3809,19 @@ ${generateInvoiceHtml(row)}
       }
     });
     
-    // Get historical entries (excluding CNs) - case-insensitive
-    const historicalInvoices = ledgerEntries.filter(e => 
+    const stateInvoiceNos = new Set(Array.from(invoiceMap.keys()));
+    
+    // Historical entries - only show if no state filter
+    const historicalInvoices = !selectedPartyState ? ledgerEntries.filter(e => 
       matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-    );
+    ) : [];
     
-    // Get historical CNs - case-insensitive
-    const historicalCNs = ledgerEntries.filter(e => 
+    const historicalCNs = !selectedPartyState ? ledgerEntries.filter(e => 
       matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-    );
+    ) : [];
     
-    const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty));
-    const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty));
+    const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(r.invoiceNo)));
+    const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(cn.invoiceNo)));
     
     // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272" or "CN/2022-23/272")
     const getInvoiceYearSuffix = (vchNo) => {
@@ -4058,12 +4073,17 @@ ${generateInvoiceHtml(row)}
       return sum;
     }, 0);
     
-    // Get party address and GSTIN from partiesForLedger (includes Party Master data) - CASE-INSENSITIVE
+    // Get party address and GSTIN (STATE-AWARE)
     const selectedPartyUpper = (selectedParty || '').trim().toUpperCase();
-    const partyInfo = partiesForLedger.find(p => p.partyNameUpper === selectedPartyUpper) || {};
+    let partyInfo = {};
+    if (selectedPartyState) {
+      partyInfo = partiesForLedger.find(p => p.partyNameUpper === selectedPartyUpper && p.normalizedState === selectedPartyState) || {};
+    }
+    if (!partyInfo.state) {
+      partyInfo = partiesForLedger.find(p => p.partyNameUpper === selectedPartyUpper) || {};
+    }
     const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === selectedPartyUpper);
-    const partyAddress = partyRow?.statePartyDetails || partyInfo.state || '';
-    // Get GSTIN - first try partiesForLedger, then fallback to getPartyGstin
+    const partyAddress = partyInfo.state || partyRow?.statePartyDetails || '';
     const partyGstin = partyInfo.gstin || getPartyGstin(selectedParty, partyAddress);
     
     const html = `
@@ -4197,15 +4217,16 @@ ${generateInvoiceHtml(row)}
   };
 
   const renderLedgers = () => {
-    // Calculate closing balance as sum of individual invoice balances (CASE-INSENSITIVE)
-    const getPartyBalance = (party) => {
+    // Calculate closing balance - STATE-AWARE for multi-state parties
+    const getPartyBalance = (party, partyNormalizedState) => {
       const opening = openingBalances[party] || 0;
       
-      // Get all invoices for this party (case-insensitive)
+      // Get all invoices for this party+state (case-insensitive, state-aware)
       const partyInvoices = masterData.filter(r => 
         matchParty(r.partyName, party) && 
         r.invoiceGenerated && 
-        r.invoiceStatus === 'Approved'
+        r.invoiceStatus === 'Approved' &&
+        (!partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
       );
       
       // Group by invoice number
@@ -4222,19 +4243,20 @@ ${generateInvoiceHtml(row)}
         }
       });
       
-      // Get receipts and credit notes for this party (case-insensitive)
-      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party));
-      const partyCreditNotes = creditNotes.filter(cn => matchParty(cn.partyName, party));
+      // Get receipts and credit notes for this party (receipts/CNs don't have state, match by invoice)
+      const invoiceNos = new Set(Array.from(invoiceMap.keys()));
+      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party) && (!partyNormalizedState || invoiceNos.has(r.invoiceNo)));
+      const partyCreditNotes = creditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyNormalizedState || invoiceNos.has(cn.invoiceNo)));
       
-      // Historical invoices (case-insensitive)
-      const historicalInvoices = ledgerEntries.filter(e => 
+      // Historical invoices (case-insensitive) - historical entries don't have state, include only if no state filter or no Party Master entries
+      const historicalInvoices = !partyNormalizedState ? ledgerEntries.filter(e => 
         matchParty(e.partyName, party) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-      );
+      ) : [];
       
-      // Historical CNs (case-insensitive)
-      const historicalCNs = ledgerEntries.filter(e => 
+      // Historical CNs
+      const historicalCNs = !partyNormalizedState ? ledgerEntries.filter(e => 
         matchParty(e.partyName, party) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-      );
+      ) : [];
       
       // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
       const getInvoiceYearSuffix = (vchNo) => {
@@ -4320,14 +4342,23 @@ ${generateInvoiceHtml(row)}
       (p.state && p.state.toLowerCase().includes(ledgerPartySearch.toLowerCase()))
     );
     
-    // Get party info from partiesForLedger (CASE-INSENSITIVE)
+    // Get party info from partiesForLedger (STATE-AWARE)
     const getPartyInfo = (partyName) => {
       const nameUpper = (partyName || '').trim().toUpperCase();
+      // If we have a selected state, find the matching state entry
+      if (selectedPartyState) {
+        const match = partiesForLedger.find(p => p.partyNameUpper === nameUpper && p.normalizedState === selectedPartyState);
+        if (match) return match;
+      }
       return partiesForLedger.find(p => p.partyNameUpper === nameUpper) || { state: '', gstin: '' };
     };
     
-    // Get party address from masterData or partiesForLedger (CASE-INSENSITIVE)
+    // Get party address (STATE-AWARE)
     const getPartyAddress = (partyName) => {
+      if (selectedPartyState) {
+        const match = partiesForLedger.find(p => p.partyNameUpper === (partyName || '').trim().toUpperCase() && p.normalizedState === selectedPartyState);
+        if (match?.state) return match.state;
+      }
       const nameUpper = (partyName || '').trim().toUpperCase();
       const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === nameUpper);
       if (partyRow?.statePartyDetails) return partyRow.statePartyDetails;
@@ -4335,14 +4366,18 @@ ${generateInvoiceHtml(row)}
       return partyInfo?.state || '';
     };
     
-    // Get party GSTIN for selected party (CASE-INSENSITIVE)
+    // Get party GSTIN (STATE-AWARE)
     const getSelectedPartyGstin = (partyName) => {
       const nameUpper = (partyName || '').trim().toUpperCase();
-      // First try from partiesForLedger (includes Party Master data)
+      // If we have a selected state, find GSTIN for that specific state
+      if (selectedPartyState) {
+        const match = partiesForLedger.find(p => p.partyNameUpper === nameUpper && p.normalizedState === selectedPartyState);
+        if (match?.gstin) return match.gstin;
+      }
+      // Fallback: first matching entry
       const partyInfo = partiesForLedger.find(p => p.partyNameUpper === nameUpper);
       if (partyInfo?.gstin) return partyInfo.gstin;
       
-      // Fallback: try matching with state from masterData
       const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === nameUpper);
       if (partyRow) {
         return getPartyGstin(partyName, partyRow.statePartyDetails);
@@ -4350,7 +4385,7 @@ ${generateInvoiceHtml(row)}
       return '';
     };
     
-    // Build detailed ledger data for selected party
+    // Build detailed ledger data for selected party (STATE-AWARE)
     const buildDetailedLedger = () => {
       if (!selectedParty) return { entries: [], totals: { debit: 0, credit: 0, received: 0, tds: 0, balance: 0 } };
       
@@ -4368,11 +4403,12 @@ ${generateInvoiceHtml(row)}
         return parts[parts.length - 1];
       };
       
-      // Get all invoices for this party from masterData (case-insensitive)
+      // Get all invoices for this party+state from masterData (STATE-AWARE)
       const partyInvoices = masterData.filter(r => 
         matchParty(r.partyName, selectedParty) && 
         r.invoiceGenerated && 
-        r.invoiceStatus === 'Approved'
+        r.invoiceStatus === 'Approved' &&
+        (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
       );
       
       // Group by invoice number
@@ -4396,21 +4432,22 @@ ${generateInvoiceHtml(row)}
         }
       });
       
-      // Get historical entries for this party (case-insensitive)
-      const historicalInvoices = ledgerEntries.filter(e => 
+      // Collect invoice numbers for this state's ledger (to filter receipts/CNs)
+      const stateInvoiceNos = new Set(Array.from(invoiceMap.keys()));
+      
+      // Historical entries - only show if no state filter (historical data doesn't have state)
+      const historicalInvoices = !selectedPartyState ? ledgerEntries.filter(e => 
         matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-      );
+      ) : [];
       
-      // Get historical credit notes (case-insensitive)
-      const historicalCNs = ledgerEntries.filter(e => 
+      const historicalCNs = !selectedPartyState ? ledgerEntries.filter(e => 
         matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-      );
+      ) : [];
       
-      // Get receipts for this party (case-insensitive)
-      const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty));
+      // Receipts/CNs - filter by invoice number when state is selected
+      const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(r.invoiceNo)));
       
-      // Get credit notes from creditNotes state only (case-insensitive)
-      const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty));
+      const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(cn.invoiceNo)));
       
       // Create a map of ALL credit notes by year+suffix (combine system + historical)
       const creditNoteByYearSuffix = new Map();
@@ -4793,9 +4830,10 @@ ${generateInvoiceHtml(row)}
             <div style={{ maxHeight: '450px', overflowY: 'auto' }}>
               {filteredParties.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>{ledgerPartySearch ? 'No matching parties' : 'No parties yet'}</div> : (
                 filteredParties.map((partyInfo, idx) => {
-                  const balance = getPartyBalance(partyInfo.partyName);
+                  const balance = getPartyBalance(partyInfo.partyName, partyInfo.normalizedState);
+                  const isSelected = matchParty(selectedParty, partyInfo.partyName) && selectedPartyState === partyInfo.normalizedState;
                   return (
-                    <div key={`${partyInfo.partyName}-${partyInfo.state}-${idx}`} onClick={() => setSelectedParty(partyInfo.partyName)} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: selectedParty === partyInfo.partyName ? '#EFF6FF' : 'transparent', borderLeft: selectedParty === partyInfo.partyName ? '4px solid #2874A6' : '4px solid transparent' }}>
+                    <div key={`${partyInfo.partyName}-${partyInfo.state}-${idx}`} onClick={() => { setSelectedParty(partyInfo.partyName); setSelectedPartyState(partyInfo.normalizedState || null); }} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: isSelected ? '#EFF6FF' : 'transparent', borderLeft: isSelected ? '4px solid #2874A6' : '4px solid transparent' }}>
                       <div style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{partyInfo.partyName}</div>
                       {partyInfo.state && <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>📍 {partyInfo.state}</div>}
                       {partyInfo.gstin && <div style={{ fontSize: '10px', color: '#2874A6', marginTop: '1px' }}>GST: {partyInfo.gstin}</div>}
