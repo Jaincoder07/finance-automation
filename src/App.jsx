@@ -599,6 +599,39 @@ export default function FinanceApp() {
     return '';
   }, [safePartyMaster, normalizeStateName]);
 
+  // Get party address by matching party name and state (CASE-INSENSITIVE)
+  const getPartyAddressFromMaster = useCallback((partyName, stateDetails) => {
+    if (!partyName) return '';
+    const normalizedState = normalizeStateName(stateDetails);
+    const partyNameUpper = partyName.trim().toUpperCase();
+    
+    // Try composite key with uppercase party name
+    const compositeKey = `${partyNameUpper}|${normalizedState}`;
+    if (safePartyMaster[compositeKey]?.address) {
+      return safePartyMaster[compositeKey].address;
+    }
+    
+    // Fallback: search through all entries for matching party name and state
+    for (const key in safePartyMaster) {
+      const entry = safePartyMaster[key];
+      const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+      if (entryNameUpper === partyNameUpper && entry.normalizedState === normalizedState) {
+        return entry.address || '';
+      }
+    }
+    
+    // Try matching just by party name if state doesn't match
+    for (const key in safePartyMaster) {
+      const entry = safePartyMaster[key];
+      const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+      if (entryNameUpper === partyNameUpper && entry.address) {
+        return entry.address;
+      }
+    }
+    
+    return '';
+  }, [safePartyMaster, normalizeStateName]);
+
   // ============================================
   // FIREBASE DATA PERSISTENCE
   // ============================================
@@ -1079,6 +1112,7 @@ export default function FinanceApp() {
             state: entry.stateName || '',
             normalizedState: normalizedState,
             gstin: entry.gstin || '',
+            address: entry.address || '',
             fromPartyMaster: true
           });
         }
@@ -1099,6 +1133,7 @@ export default function FinanceApp() {
             state: r.statePartyDetails || '',
             normalizedState: normalizedState,
             gstin: '', // Will be looked up dynamically
+            address: '',
             fromPartyMaster: false
           });
         }
@@ -1118,6 +1153,7 @@ export default function FinanceApp() {
             state: e.state || e.statePartyDetails || '',
             normalizedState: normalizedState,
             gstin: '',
+            address: '',
             fromPartyMaster: false
           });
         }
@@ -1135,6 +1171,7 @@ export default function FinanceApp() {
           state: '',
           normalizedState: '',
           gstin: '',
+          address: '',
           fromPartyMaster: false
         });
       }
@@ -1923,6 +1960,7 @@ Phone: ${companyConfig.phone}`;
       data.forEach(row => {
         const partyName = (row['Name of Ledger'] || row['Party Name'] || row['NAME OF LEDGER'] || row['PARTY NAME'] || '').trim();
         const stateName = (row['State Name'] || row['STATE NAME'] || row['State'] || row['STATE'] || '').trim();
+        const address = (row['Address'] || row['ADDRESS'] || row['Party Address'] || row['PARTY ADDRESS'] || '').trim();
         
         if (partyName) {
           // Create composite key using UPPERCASE for case-insensitive matching
@@ -1936,7 +1974,8 @@ Phone: ${companyConfig.phone}`;
             stateName: stateName,
             normalizedState: normalizedState,
             gstRegType: row['GST Registration Type'] || row['GST REGISTRATION TYPE'] || 'Regular',
-            gstin: (row['GSTIN/UIN'] || row['GSTIN'] || row['GST'] || '').trim()
+            gstin: (row['GSTIN/UIN'] || row['GSTIN'] || row['GST'] || '').trim(),
+            address: address
           };
           addedCount++;
         }
@@ -1952,8 +1991,8 @@ Phone: ${companyConfig.phone}`;
   // Download Party Master Template
   const downloadPartyMasterTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { 'Sl. No.': 1, 'Name of Ledger': 'ABC PRIVATE LIMITED', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Maharashtra', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '27AAACA1234A1ZQ' },
-      { 'Sl. No.': 2, 'Name of Ledger': 'XYZ MEDIA PVT LTD', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Delhi', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '07AAACX5678B1ZR' }
+      { 'Sl. No.': 1, 'Name of Ledger': 'ABC PRIVATE LIMITED', 'Address': '123 Business Park, Andheri East', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Maharashtra', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '27AAACA1234A1ZQ' },
+      { 'Sl. No.': 2, 'Name of Ledger': 'XYZ MEDIA PVT LTD', 'Address': '456 Media Tower, Connaught Place', 'Ledger Group': 'Sundry Debtors', 'State Name': 'Delhi', 'GST Registration Type': 'Regular', 'GSTIN/UIN': '07AAACX5678B1ZR' }
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Party Master');
@@ -2582,6 +2621,8 @@ ${companyConfig.email}`;
     
     // Get party GSTIN by matching party name AND state
     const partyGstin = getPartyGstin(row.partyName, row.statePartyDetails);
+    // Get party address from Party Master
+    const partyAddress = getPartyAddressFromMaster(row.partyName, row.statePartyDetails);
     
     const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
     const cgst = isSameState ? totalAmount * 0.09 : 0;
@@ -2654,7 +2695,7 @@ ${companyConfig.email}`;
       <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
         <div style="font-size: 11px; color: #666; margin-bottom: 3px;">Buyer (Bill to)</div>
         <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px; color: #1a5276;">${row.partyName}</div>
-        <div style="font-size: 11px; color: #333;">${row.statePartyDetails || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${row.statePartyDetails || companyConfig.stateName}</div>
+        <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${row.statePartyDetails || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${row.statePartyDetails || companyConfig.stateName}</div>
       </div>
       <table style="width: 100%; border-collapse: collapse;">
         <thead><tr style="background: #e8e8e8;"><th style="border: 1px solid #000; padding: 10px; width: 45px; font-size: 12px;">Sl No.</th><th style="border: 1px solid #000; padding: 10px; font-size: 12px;">Particulars</th><th style="border: 1px solid #000; padding: 10px; width: 80px; font-size: 12px;">HSN/SAC</th><th style="border: 1px solid #000; padding: 10px; width: 100px; text-align: right; font-size: 12px;">Amount</th></tr></thead>
@@ -4083,8 +4124,9 @@ ${generateInvoiceHtml(row)}
       partyInfo = partiesForLedger.find(p => p.partyNameUpper === selectedPartyUpper) || {};
     }
     const partyRow = masterData.find(r => r.partyName?.trim().toUpperCase() === selectedPartyUpper);
-    const partyAddress = partyInfo.state || partyRow?.statePartyDetails || '';
-    const partyGstin = partyInfo.gstin || getPartyGstin(selectedParty, partyAddress);
+    const partyStateName = partyInfo.state || partyRow?.statePartyDetails || '';
+    const partyFullAddress = partyInfo.address || getPartyAddressFromMaster(selectedParty, partyStateName) || '';
+    const partyGstin = partyInfo.gstin || getPartyGstin(selectedParty, partyStateName);
     
     const html = `
 <!DOCTYPE html>
@@ -4141,7 +4183,8 @@ ${generateInvoiceHtml(row)}
   <div class="party-section">
     <div class="party-name">${selectedParty}</div>
     <div class="ledger-title">Ledger Account</div>
-    ${partyAddress ? `<div class="party-address">${partyAddress}</div>` : ''}
+    ${partyFullAddress ? `<div class="party-address">${partyFullAddress}</div>` : ''}
+    ${partyStateName ? `<div class="party-address">📍 ${partyStateName}</div>` : ''}
     ${partyGstin ? `<div class="party-gstin">GSTIN: ${partyGstin}</div>` : ''}
   </div>
   
@@ -4350,11 +4393,11 @@ ${generateInvoiceHtml(row)}
         const match = partiesForLedger.find(p => p.partyNameUpper === nameUpper && p.normalizedState === selectedPartyState);
         if (match) return match;
       }
-      return partiesForLedger.find(p => p.partyNameUpper === nameUpper) || { state: '', gstin: '' };
+      return partiesForLedger.find(p => p.partyNameUpper === nameUpper) || { state: '', gstin: '', address: '' };
     };
     
-    // Get party address (STATE-AWARE)
-    const getPartyAddress = (partyName) => {
+    // Get party state (STATE-AWARE)
+    const getPartyState = (partyName) => {
       if (selectedPartyState) {
         const match = partiesForLedger.find(p => p.partyNameUpper === (partyName || '').trim().toUpperCase() && p.normalizedState === selectedPartyState);
         if (match?.state) return match.state;
@@ -4364,6 +4407,19 @@ ${generateInvoiceHtml(row)}
       if (partyRow?.statePartyDetails) return partyRow.statePartyDetails;
       const partyInfo = partiesForLedger.find(p => p.partyNameUpper === nameUpper);
       return partyInfo?.state || '';
+    };
+    
+    // Get party full address from Party Master (STATE-AWARE)
+    const getSelectedPartyFullAddress = (partyName) => {
+      const nameUpper = (partyName || '').trim().toUpperCase();
+      if (selectedPartyState) {
+        const match = partiesForLedger.find(p => p.partyNameUpper === nameUpper && p.normalizedState === selectedPartyState);
+        if (match?.address) return match.address;
+      }
+      const partyInfo = partiesForLedger.find(p => p.partyNameUpper === nameUpper);
+      if (partyInfo?.address) return partyInfo.address;
+      // Fallback to getPartyAddressFromMaster
+      return getPartyAddressFromMaster(partyName, getPartyState(partyName));
     };
     
     // Get party GSTIN (STATE-AWARE)
@@ -4861,8 +4917,11 @@ ${generateInvoiceHtml(row)}
                 <div style={{ textAlign: 'center', padding: '12px', borderBottom: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
                   <div style={{ fontSize: '14px', fontWeight: '700', color: '#1E293B' }}>{selectedParty}</div>
                   <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B' }}>Ledger Account</div>
-                  {getPartyAddress(selectedParty) && (
-                    <div style={{ fontSize: '11px', color: '#64748B', marginTop: '4px' }}>📍 {getPartyAddress(selectedParty)}</div>
+                  {getSelectedPartyFullAddress(selectedParty) && (
+                    <div style={{ fontSize: '11px', color: '#475569', marginTop: '4px' }}>{getSelectedPartyFullAddress(selectedParty)}</div>
+                  )}
+                  {getPartyState(selectedParty) && (
+                    <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>📍 {getPartyState(selectedParty)}</div>
                   )}
                   {getSelectedPartyGstin(selectedParty) && (
                     <div style={{ fontSize: '11px', color: '#2874A6', marginTop: '3px', fontWeight: '600' }}>GSTIN: {getSelectedPartyGstin(selectedParty)}</div>
