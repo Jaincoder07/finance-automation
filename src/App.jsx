@@ -420,17 +420,18 @@ export default function FinanceApp() {
   // Master Sheet Tabs
   const [masterSheetTab, setMasterSheetTab] = useState('open'); // 'open' or 'closed'
   
-  // Services Sheet
+  // Services Sheet (same structure as Master Sheet)
   const [servicesSheetTab, setServicesSheetTab] = useState('open');
   const [showAddServiceModal, setShowAddServiceModal] = useState(false);
   const [selectedServiceRow, setSelectedServiceRow] = useState(null);
-  const [serviceForm, setServiceForm] = useState({
-    partyName: '',
-    statePartyDetails: '',
-    serviceType: 'Podcast Production',
-    description: '',
-    date: new Date().toISOString().split('T')[0],
-    amount: ''
+  const [expandedServiceParties, setExpandedServiceParties] = useState(new Set());
+  const [serviceFilters, setServiceFilters] = useState({
+    party: '', billStatus: '', invoiceStatus: ''
+  });
+  
+  // Receipt Register Filters
+  const [receiptFilters, setReceiptFilters] = useState({
+    party: '', invoiceNo: '', dateFrom: '', dateTo: ''
   });
   
   // Invoice Register Filters
@@ -504,6 +505,7 @@ export default function FinanceApp() {
   });
   
   const excelInputRef = useRef(null);
+  const servicesExcelInputRef = useRef(null);
   const imageInputRef = useRef(null);
   const logoInputRef = useRef(null);
   const invoiceValueInputRef = useRef(null);
@@ -3415,75 +3417,103 @@ ${generateInvoiceHtml(row)}
     );
   };
 
+
   // ============================================
-  // SERVICES SHEET (Non-campaign invoices)
+  // SERVICES SHEET (Same structure as Master Sheet)
   // ============================================
   
-  const serviceTypes = [
-    'Podcast Production',
-    'Podcast Promotion', 
-    'Video Production',
-    'Content Creation',
-    'Social Media Management',
-    'Consulting',
-    'Other Services'
-  ];
-  
-  // Get party details from Party Master for services
-  const getPartyDetailsForService = (partyName) => {
-    if (!partyName) return { state: '', gstin: '', address: '' };
-    const nameUpper = partyName.trim().toUpperCase();
-    for (const key in partyMaster) {
-      const entry = partyMaster[key];
-      if (entry.partyName?.trim().toUpperCase() === nameUpper) {
+  // Handle Services Excel Upload (same format as Master Sheet)
+  const handleServicesExcelUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const workbook = XLSX.read(event.target.result, { type: 'binary', cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      
+      const existingKeys = new Set(
+        safeServicesData.map(row => `${row.date}|${row.time || ''}|${row.campaignName || ''}|${row.subject}`.toLowerCase())
+      );
+      
+      let duplicateCount = 0;
+      let addedCount = 0;
+      
+      const processedData = data.map((row, index) => {
+        const campaignName = row['CAMPAIGN NAME'] || row['Campaign Name'] || row['SERVICE TYPE'] || row['Service Type'] || '';
+        const extractedEmail = extractEmail(campaignName);
+        let dateValue = row['DATE'] || row['Date'] || new Date();
+        if (typeof dateValue === 'string') dateValue = new Date(dateValue);
+        const partyName = (row['PARTY NAME'] || row['Party Name'] || '').trim();
+        const senderName = row['SENDER NAME'] || row['Sender Name'] || '';
+        const subject = row['SUBJECT'] || row['Subject'] || row['DESCRIPTION'] || row['Description'] || '';
+        const time = row['TIME'] || row['Time'] || '';
+        const defaultAmount = invoiceValues[partyName] || '';
+        const dateStr = dateValue instanceof Date && !isNaN(dateValue) ? dateValue.toISOString().split('T')[0] : '';
+        
+        const campaignKey = `${dateStr}|${time}|${campaignName}|${subject}`.toLowerCase();
+        
+        if (existingKeys.has(campaignKey)) {
+          duplicateCount++;
+          return null;
+        }
+        
+        existingKeys.add(campaignKey);
+        addedCount++;
+        
         return {
-          state: entry.stateName || '',
-          gstin: entry.gstin || '',
-          address: entry.address || ''
+          id: Date.now() + index + Math.random(),
+          sno: row['SNO'] || row['SNO.'] || row['Sno'] || index + 1,
+          date: dateStr,
+          month: row['Month'] || row['MONTH'] || '',
+          time: time,
+          statePartyDetails: row['State/Party Details'] || row['STATE/PARTY DETAILS'] || row['STATE'] || row['State'] || '',
+          partyName: partyName,
+          senderName: senderName,
+          campaignName: campaignName,
+          subject: subject,
+          emailId: extractedEmail || row['EMAIL'] || row['Email'] || '',
+          additionalEmails: [],
+          toBeBilled: 'Not Yet',
+          invoiceAmount: row['AMOUNT'] || row['Amount'] || defaultAmount || '',
+          cgst: '', sgst: '', igst: '', totalWithGst: '',
+          invoiceType: 'Individual',
+          combinationCode: 'NA',
+          invoiceNo: '', invoiceDate: '', invoiceTotalAmount: '',
+          invoiceGenerated: false,
+          invoiceStatus: 'Pending',
+          mailingSent: 'No',
+          mailerUploaded: false,
+          editComments: '',
+          isService: true
         };
+      }).filter(row => row !== null);
+      
+      if (processedData.length > 0) {
+        setServicesData(prev => [...prev, ...processedData]);
+        const newParties = [...new Set(processedData.map(r => r.partyName))];
+        setExpandedServiceParties(prev => {
+          const newSet = new Set(prev);
+          newParties.forEach(p => newSet.add(p));
+          return newSet;
+        });
       }
-    }
-    return { state: '', gstin: '', address: '' };
-  };
-  
-  // Add new service entry
-  const handleAddService = () => {
-    if (!serviceForm.partyName || !serviceForm.amount || !serviceForm.description) {
-      alert('Please fill Party Name, Description, and Amount');
-      return;
-    }
-    
-    const partyDetails = getPartyDetailsForService(serviceForm.partyName);
-    const newService = {
-      id: Date.now().toString(),
-      partyName: serviceForm.partyName,
-      statePartyDetails: serviceForm.statePartyDetails || partyDetails.state,
-      serviceType: serviceForm.serviceType,
-      description: serviceForm.description,
-      date: serviceForm.date,
-      invoiceAmount: parseFloat(serviceForm.amount).toFixed(2),
-      gstin: partyDetails.gstin,
-      address: partyDetails.address,
-      toBeBilled: 'No',
-      invoiceGenerated: false,
-      invoiceStatus: null,
-      invoiceNo: null,
-      invoiceDate: null,
-      invoiceTotalAmount: null,
-      receiptStatus: 'Pending',
-      isService: true // Mark as service invoice
+      
+      let message = `✅ Services Upload Complete!\n\n`;
+      message += `• ${addedCount} new entries added\n`;
+      if (duplicateCount > 0) {
+        message += `• ${duplicateCount} duplicate entries skipped`;
+      }
+      
+      if (addedCount > 0) {
+        addNotification('upload', `📊 ${addedCount} new services uploaded`, 'director');
+      }
+      
+      alert(message);
     };
-    
-    setServicesData(prev => [...prev, newService]);
-    setShowAddServiceModal(false);
-    setServiceForm({
-      partyName: '',
-      statePartyDetails: '',
-      serviceType: 'Podcast Production',
-      description: '',
-      date: new Date().toISOString().split('T')[0],
-      amount: ''
-    });
+    reader.readAsBinaryString(file);
+    e.target.value = '';
   };
   
   // Update service row field
@@ -3493,80 +3523,14 @@ ${generateInvoiceHtml(row)}
     ));
   };
   
-  // Generate service invoice (same as master sheet)
-  const generateServiceInvoice = (row) => {
-    if (!row.invoiceAmount || parseFloat(row.invoiceAmount) <= 0) {
-      alert('Please enter a valid invoice amount');
-      return;
-    }
-    
-    const invoiceNo = `${companyConfig.invoicePrefix}${nextServiceInvoiceNo}`;
-    const invoiceDate = new Date().toISOString().split('T')[0];
-    const partyDetails = getPartyDetailsForService(row.partyName);
-    
-    const isSameState = (row.statePartyDetails || partyDetails.state)?.toUpperCase().includes('MAHARASHTRA');
-    const baseAmount = parseFloat(row.invoiceAmount);
-    const gstAmount = baseAmount * 0.18;
-    const totalAmount = baseAmount + gstAmount;
-    
-    setServicesData(prev => prev.map(r => 
-      r.id === row.id ? {
-        ...r,
-        invoiceNo,
-        invoiceDate,
-        invoiceTotalAmount: totalAmount.toFixed(2),
-        invoiceGenerated: true,
-        invoiceStatus: 'Created',
-        statePartyDetails: row.statePartyDetails || partyDetails.state
-      } : r
-    ));
-    
-    setNextServiceInvoiceNo(prev => prev + 1);
-    
-    // Add notification
-    const notif = {
-      id: Date.now(),
-      type: 'invoice_created',
-      title: 'Service Invoice Created',
-      message: `Invoice ${invoiceNo} for ${row.partyName} - ₹${totalAmount.toLocaleString('en-IN')}`,
-      timestamp: new Date().toISOString(),
-      read: false,
-      forRole: 'director'
-    };
-    setNotifications(prev => [notif, ...prev]);
-  };
-  
-  // Approve/Reject service invoice (Director)
-  const handleServiceApproval = (row, action, remarks = '') => {
-    if (action === 'approve') {
-      setServicesData(prev => prev.map(r => 
-        r.id === row.id ? { ...r, invoiceStatus: 'Approved', directorRemarks: remarks || null } : r
-      ));
-      const notif = {
-        id: Date.now(),
-        type: 'invoice_approved',
-        title: 'Service Invoice Approved',
-        message: `Invoice ${row.invoiceNo} for ${row.partyName} approved`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        forRole: 'finance'
-      };
-      setNotifications(prev => [notif, ...prev]);
-    } else if (action === 'needsEdit') {
-      setServicesData(prev => prev.map(r => 
-        r.id === row.id ? { ...r, invoiceStatus: 'Need Edits', directorRemarks: remarks } : r
-      ));
-      const notif = {
-        id: Date.now(),
-        type: 'invoice_needs_edit',
-        title: 'Service Invoice Needs Edits',
-        message: `Invoice ${row.invoiceNo}: ${remarks}`,
-        timestamp: new Date().toISOString(),
-        read: false,
-        forRole: 'finance'
-      };
-      setNotifications(prev => [notif, ...prev]);
-    }
+  // Toggle service party expansion
+  const toggleServicePartyExpansion = (party) => {
+    setExpandedServiceParties(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(party)) newSet.delete(party);
+      else newSet.add(party);
+      return newSet;
+    });
   };
   
   // Delete service row
@@ -3581,19 +3545,73 @@ ${generateInvoiceHtml(row)}
     }
   };
   
-  // Generate service invoice PDF (similar to master sheet)
-  const generateServiceInvoicePDF = (row) => {
-    const partyDetails = getPartyDetailsForService(row.partyName);
-    const partyGstin = row.gstin || partyDetails.gstin;
-    const partyAddress = row.address || partyDetails.address;
-    const partyState = row.statePartyDetails || partyDetails.state;
+  // Generate service invoice (same as master sheet)
+  const generateServiceInvoice = (rowId) => {
+    const row = servicesData.find(r => r.id === rowId);
+    if (!row) return;
     
+    if (!row.invoiceAmount || parseFloat(row.invoiceAmount) <= 0) {
+      alert('Please enter a valid invoice amount');
+      return;
+    }
+    
+    const invoiceNo = `${companyConfig.invoicePrefix}${nextServiceInvoiceNo}`;
+    const invoiceDate = new Date().toISOString().split('T')[0];
+    
+    const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
     const baseAmount = parseFloat(row.invoiceAmount);
-    const isSameState = partyState?.toUpperCase().includes('MAHARASHTRA');
     const cgst = isSameState ? baseAmount * 0.09 : 0;
     const sgst = isSameState ? baseAmount * 0.09 : 0;
     const igst = isSameState ? 0 : baseAmount * 0.18;
-    const grandTotal = parseFloat(row.invoiceTotalAmount);
+    const totalAmount = baseAmount + cgst + sgst + igst;
+    
+    setServicesData(prev => prev.map(r => 
+      r.id === rowId ? {
+        ...r,
+        invoiceNo,
+        invoiceDate,
+        invoiceTotalAmount: totalAmount.toFixed(2),
+        cgst: cgst.toFixed(2),
+        sgst: sgst.toFixed(2),
+        igst: igst.toFixed(2),
+        totalWithGst: totalAmount.toFixed(2),
+        invoiceGenerated: true,
+        invoiceStatus: 'Created'
+      } : r
+    ));
+    
+    setNextServiceInvoiceNo(prev => prev + 1);
+    
+    addNotification('invoice_created', `Service Invoice ${invoiceNo} created for ${row.partyName}`, 'director');
+  };
+  
+  // Approve/Reject service invoice (Director)
+  const handleServiceApproval = (row, action, remarks = '') => {
+    if (action === 'approve') {
+      setServicesData(prev => prev.map(r => 
+        r.id === row.id ? { ...r, invoiceStatus: 'Approved', directorRemarks: remarks || null } : r
+      ));
+      addNotification('invoice_approved', `Service Invoice ${row.invoiceNo} approved`, 'finance');
+    } else if (action === 'needsEdit') {
+      setServicesData(prev => prev.map(r => 
+        r.id === row.id ? { ...r, invoiceStatus: 'Need Edits', directorRemarks: remarks } : r
+      ));
+      addNotification('invoice_needs_edit', `Service Invoice ${row.invoiceNo}: ${remarks}`, 'finance');
+    }
+  };
+  
+  // Generate service invoice PDF
+  const generateServiceInvoicePDF = (row) => {
+    const partyGstin = getPartyGstinFromMaster(row.partyName, row.statePartyDetails);
+    const partyAddress = getPartyAddressFromMaster(row.partyName, row.statePartyDetails);
+    const partyState = row.statePartyDetails;
+    
+    const baseAmount = parseFloat(row.invoiceAmount) || 0;
+    const cgst = parseFloat(row.cgst) || 0;
+    const sgst = parseFloat(row.sgst) || 0;
+    const igst = parseFloat(row.igst) || 0;
+    const grandTotal = parseFloat(row.invoiceTotalAmount) || (baseAmount + cgst + sgst + igst);
+    const isSameState = cgst > 0;
     
     const html = `
 <!DOCTYPE html>
@@ -3601,7 +3619,7 @@ ${generateInvoiceHtml(row)}
 <head>
   <title>Tax Invoice - ${row.invoiceNo}</title>
   <style>
-    @media print { body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } @page { size: A4; margin: 10mm; } }
+    @media print { body { -webkit-print-color-adjust: exact !important; } @page { size: A4; margin: 10mm; } }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; font-size: 12px; }
     .invoice-container { max-width: 800px; margin: 0 auto; border: 2px solid #000; }
@@ -3627,13 +3645,13 @@ ${generateInvoiceHtml(row)}
       <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${partyState || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${partyState || companyConfig.stateName}</div>
     </div>
     <table style="width: 100%; border-collapse: collapse;">
-      <thead><tr style="background: #e8e8e8;"><th style="border: 1px solid #000; padding: 10px; width: 45px; font-size: 12px;">Sl No.</th><th style="border: 1px solid #000; padding: 10px; font-size: 12px;">Particulars</th><th style="border: 1px solid #000; padding: 10px; width: 80px; font-size: 12px;">HSN/SAC</th><th style="border: 1px solid #000; padding: 10px; width: 100px; text-align: right; font-size: 12px;">Amount</th></tr></thead>
+      <thead><tr style="background: #e8e8e8;"><th style="border: 1px solid #000; padding: 10px; width: 45px;">Sl No.</th><th style="border: 1px solid #000; padding: 10px;">Particulars</th><th style="border: 1px solid #000; padding: 10px; width: 80px;">HSN/SAC</th><th style="border: 1px solid #000; padding: 10px; width: 100px; text-align: right;">Amount</th></tr></thead>
       <tbody>
         <tr>
           <td style="border: 1px solid #000; padding: 8px; text-align: center;">1</td>
           <td style="border: 1px solid #000; padding: 8px;">
-            <div style="font-weight: 600;">${row.serviceType.toUpperCase()}</div>
-            <div style="font-style: italic; color: #555; font-size: 11px; margin-top: 2px;">${row.description}</div>
+            <div style="font-weight: 600;">${(row.campaignName || 'SERVICE').toUpperCase()}</div>
+            <div style="font-style: italic; color: #555; font-size: 11px; margin-top: 2px;">${row.subject || ''}</div>
             <div style="font-style: italic; color: #555; font-size: 11px;">Date: ${formatDate(row.date)}</div>
           </td>
           <td style="border: 1px solid #000; padding: 8px; text-align: center;">${companyConfig.hsnCode}</td>
@@ -3668,17 +3686,36 @@ ${generateInvoiceHtml(row)}
     printWindow.print();
   };
   
+  // Services parties list
+  const servicesParties = useMemo(() => {
+    return [...new Set(safeServicesData.map(r => r.partyName).filter(Boolean))].sort();
+  }, [safeServicesData]);
+  
+  // Filtered services data
+  const filteredServicesData = useMemo(() => {
+    return safeServicesData.filter(row => {
+      if (serviceFilters.party && row.partyName !== serviceFilters.party) return false;
+      if (serviceFilters.billStatus && row.toBeBilled !== serviceFilters.billStatus) return false;
+      if (serviceFilters.invoiceStatus) {
+        if (serviceFilters.invoiceStatus === 'Pending' && row.invoiceGenerated) return false;
+        if (serviceFilters.invoiceStatus === 'Created' && row.invoiceStatus !== 'Created') return false;
+        if (serviceFilters.invoiceStatus === 'Approved' && row.invoiceStatus !== 'Approved') return false;
+        if (serviceFilters.invoiceStatus === 'Need Edits' && row.invoiceStatus !== 'Need Edits') return false;
+      }
+      return true;
+    });
+  }, [safeServicesData, serviceFilters]);
+  
   const renderServices = () => {
     const isDirector = userRole === 'director';
+    const canEdit = userRole === 'finance';
     
-    // Filter services based on tab
-    const openServices = safeServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved' || r.receiptStatus === 'Pending');
-    const closedServices = safeServicesData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved' && r.receiptStatus !== 'Pending');
-    const displayServices = servicesSheetTab === 'open' ? openServices : closedServices;
+    const openServices = filteredServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved');
+    const closedServices = filteredServicesData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved');
+    const filteredTabData = servicesSheetTab === 'open' ? openServices : closedServices;
     
-    // Group by party
     const groupedByParty = {};
-    displayServices.forEach(row => {
+    filteredTabData.forEach(row => {
       const party = row.partyName || 'Unknown';
       if (!groupedByParty[party]) groupedByParty[party] = [];
       groupedByParty[party].push(row);
@@ -3687,20 +3724,52 @@ ${generateInvoiceHtml(row)}
     
     return (
       <div style={{ padding: '20px' }}>
-        {/* Header */}
+        <input type="file" ref={servicesExcelInputRef} onChange={handleServicesExcelUpload} accept=".xlsx,.xls,.csv" style={{ display: 'none' }} />
+        
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
-            <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1E293B', marginBottom: '4px' }}>Services Sheet</h1>
-            <p style={{ fontSize: '13px', color: '#64748B' }}>Non-campaign invoices (Podcast, Video Production, etc.)</p>
+            <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1E293B', marginBottom: '4px' }}>📋 Services Sheet</h1>
+            <p style={{ fontSize: '13px', color: '#64748B' }}>Non-campaign invoices (same workflow as Master Sheet)</p>
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            {!isDirector && (
-              <ActionButton icon={Plus} label="Add Service" onClick={() => setShowAddServiceModal(true)} />
+          <div style={{ display: 'flex', gap: '10px' }}>
+            {canEdit && (
+              <>
+                <ActionButton icon={Upload} label="Upload Excel" onClick={() => servicesExcelInputRef.current?.click()} />
+                <ActionButton icon={Plus} label="Add Entry" variant="primary" onClick={() => setShowAddServiceModal(true)} />
+              </>
             )}
           </div>
         </div>
         
-        {/* Tabs */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '14px 18px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+            <Filter size={18} color="#64748B" />
+            <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Filters:</span>
+            <select value={serviceFilters.party} onChange={(e) => setServiceFilters(prev => ({ ...prev, party: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}>
+              <option value="">All Parties</option>
+              {servicesParties.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <select value={serviceFilters.billStatus} onChange={(e) => setServiceFilters(prev => ({ ...prev, billStatus: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}>
+              <option value="">All Bill Status</option>
+              <option value="Yes">To Be Billed</option>
+              <option value="No">Not Billing</option>
+              <option value="Not Yet">Not Yet</option>
+            </select>
+            <select value={serviceFilters.invoiceStatus} onChange={(e) => setServiceFilters(prev => ({ ...prev, invoiceStatus: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}>
+              <option value="">All Invoice Status</option>
+              <option value="Pending">Pending</option>
+              <option value="Created">Created</option>
+              <option value="Approved">Approved</option>
+              <option value="Need Edits">Need Edits</option>
+            </select>
+            {(serviceFilters.party || serviceFilters.billStatus || serviceFilters.invoiceStatus) && (
+              <button onClick={() => setServiceFilters({ party: '', billStatus: '', invoiceStatus: '' })} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #FCA5A5', borderRadius: '8px', backgroundColor: '#FEE2E2', color: '#991B1B', cursor: 'pointer' }}>
+                <X size={14} /> Clear
+              </button>
+            )}
+          </div>
+        </div>
+        
         <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
           <button onClick={() => setServicesSheetTab('open')} style={{ padding: '10px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer', backgroundColor: servicesSheetTab === 'open' ? '#2874A6' : '#E2E8F0', color: servicesSheetTab === 'open' ? '#FFFFFF' : '#64748B' }}>
             Open ({openServices.length})
@@ -3710,201 +3779,209 @@ ${generateInvoiceHtml(row)}
           </button>
         </div>
         
-        {/* Services Table */}
         <Card title={`Services - ${servicesSheetTab === 'open' ? 'Open' : 'Closed'}`} noPadding>
           {sortedParties.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>
               <Layers size={40} style={{ marginBottom: '10px', opacity: 0.5 }} />
               <p>No services in this tab</p>
+              {canEdit && <p style={{ marginTop: '10px', fontSize: '13px' }}>Upload Excel or Add Entry to get started</p>}
             </div>
           ) : (
-            sortedParties.map(party => (
-              <div key={party} style={{ borderBottom: '2px solid #E2E8F0' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#F8FAFC', cursor: 'pointer' }}>
-                  <div style={{ fontWeight: '600', color: '#1E293B' }}>{party}</div>
-                  <div style={{ fontSize: '12px', color: '#64748B' }}>{groupedByParty[party].length} items</div>
+            sortedParties.map(party => {
+              const partyRows = groupedByParty[party];
+              const isExpanded = expandedServiceParties.has(party);
+              const partyTotal = partyRows.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || parseFloat(r.invoiceAmount) || 0), 0);
+              
+              return (
+                <div key={party} style={{ borderBottom: '2px solid #E2E8F0' }}>
+                  <div onClick={() => toggleServicePartyExpansion(party)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: servicesSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      {isExpanded ? <ChevronDown size={20} color="#2874A6" /> : <ChevronRight size={20} color="#64748B" />}
+                      <span style={{ fontWeight: '700', fontSize: '15px', color: '#1E293B' }}>{party}</span>
+                      <span style={{ padding: '4px 10px', backgroundColor: '#E0E7FF', color: '#3730A3', borderRadius: '9999px', fontSize: '12px', fontWeight: '600' }}>{partyRows.length} items</span>
+                    </div>
+                    <div style={{ fontWeight: '700', color: '#059669' }}>{formatCurrency(partyTotal)}</div>
+                  </div>
+                  
+                  {isExpanded && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#F1F5F9' }}>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '600', color: '#475569' }}>Date</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '600', color: '#475569' }}>State</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '600', color: '#475569' }}>Sender</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '600', color: '#475569' }}>Campaign/Service</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'left', fontWeight: '600', color: '#475569' }}>Subject</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569' }}>To Bill</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '600', color: '#475569' }}>Amount</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569' }}>Invoice</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569' }}>Status</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569' }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {partyRows.map(row => (
+                            <tr key={row.id} style={{ backgroundColor: row.toBeBilled === 'Yes' ? (row.invoiceGenerated ? '#F0FDF4' : '#FFFBEB') : '#FFFFFF', borderBottom: '1px solid #F1F5F9' }}>
+                              <td style={{ padding: '10px 8px' }}>{formatDate(row.date)}</td>
+                              <td style={{ padding: '10px 8px', fontSize: '11px', color: '#64748B' }}>{row.statePartyDetails || '-'}</td>
+                              <td style={{ padding: '10px 8px', fontSize: '11px' }}>{row.senderName || '-'}</td>
+                              <td style={{ padding: '10px 8px', fontWeight: '500', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.campaignName || '-'}</td>
+                              <td style={{ padding: '10px 8px', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.subject || '-'}</td>
+                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                <button 
+                                  onClick={() => isDirector && !row.invoiceGenerated && updateServiceField(row.id, 'toBeBilled', row.toBeBilled === 'Yes' ? 'No' : 'Yes')}
+                                  disabled={row.invoiceGenerated || !isDirector}
+                                  style={{ padding: '6px 8px', fontSize: '12px', fontWeight: '600', border: '2px solid', borderRadius: '6px', cursor: row.invoiceGenerated || !isDirector ? 'not-allowed' : 'pointer', borderColor: row.toBeBilled === 'Yes' ? '#22C55E' : '#E2E8F0', backgroundColor: row.toBeBilled === 'Yes' ? '#DCFCE7' : '#FFFFFF', color: row.toBeBilled === 'Yes' ? '#166534' : '#64748B', width: '70px' }}
+                                >
+                                  {row.toBeBilled || 'Not Yet'}
+                                </button>
+                              </td>
+                              <td style={{ padding: '10px 8px', textAlign: 'right' }}>
+                                {row.invoiceGenerated ? (
+                                  <span style={{ fontWeight: '600' }}>₹{parseFloat(row.invoiceAmount || 0).toLocaleString('en-IN')}</span>
+                                ) : (
+                                  <input type="number" value={row.invoiceAmount || ''} onChange={(e) => updateServiceField(row.id, 'invoiceAmount', e.target.value)} disabled={row.invoiceGenerated} placeholder="0" style={{ width: '80px', padding: '6px', fontSize: '12px', border: '1.5px solid #E2E8F0', borderRadius: '6px', textAlign: 'right' }} />
+                                )}
+                              </td>
+                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                {row.invoiceGenerated ? (
+                                  <span style={{ fontSize: '11px', color: '#2874A6', fontWeight: '600', cursor: 'pointer' }} onClick={() => generateServiceInvoicePDF(row)}>
+                                    {row.invoiceNo}
+                                  </span>
+                                ) : (
+                                  canEdit && row.toBeBilled === 'Yes' && row.invoiceAmount ? (
+                                    <button onClick={() => generateServiceInvoice(row.id)} style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                                      Generate
+                                    </button>
+                                  ) : '-'
+                                )}
+                              </td>
+                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                {row.invoiceGenerated ? <StatusBadge status={row.invoiceStatus} small /> : '-'}
+                              </td>
+                              <td style={{ padding: '10px 8px', textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                                  {isDirector && row.invoiceGenerated && row.invoiceStatus === 'Created' && (
+                                    <>
+                                      <button onClick={() => handleServiceApproval(row, 'approve')} style={{ padding: '6px 8px', backgroundColor: '#22C55E', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }} title="Approve"><Check size={14} /></button>
+                                      <button onClick={() => { const remarks = prompt('Remarks:'); if (remarks) handleServiceApproval(row, 'needsEdit', remarks); }} style={{ padding: '6px 8px', backgroundColor: '#F59E0B', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }} title="Need Edits"><Edit2 size={14} /></button>
+                                    </>
+                                  )}
+                                  {canEdit && !row.invoiceGenerated && (
+                                    <button onClick={() => deleteServiceRow(row.id)} style={{ padding: '6px 8px', backgroundColor: '#EF4444', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }} title="Delete"><Trash2 size={14} /></button>
+                                  )}
+                                  {row.invoiceGenerated && (
+                                    <button onClick={() => generateServiceInvoicePDF(row)} style={{ padding: '6px 8px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }} title="Print"><Printer size={14} /></button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#F1F5F9' }}>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Date</th>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Service Type</th>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Description</th>
-                      <th style={{ padding: '10px', textAlign: 'left', fontSize: '11px', fontWeight: '600', color: '#475569' }}>State</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', fontWeight: '600', color: '#475569' }}>To Bill</th>
-                      <th style={{ padding: '10px', textAlign: 'right', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Amount</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Invoice</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Status</th>
-                      <th style={{ padding: '10px', textAlign: 'center', fontSize: '11px', fontWeight: '600', color: '#475569' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {groupedByParty[party].map(row => (
-                      <tr key={row.id} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: row.invoiceGenerated ? '#F0FDF4' : '#FFFFFF' }}>
-                        <td style={{ padding: '10px', fontSize: '12px' }}>{formatDate(row.date)}</td>
-                        <td style={{ padding: '10px', fontSize: '12px', fontWeight: '500' }}>{row.serviceType}</td>
-                        <td style={{ padding: '10px', fontSize: '12px', maxWidth: '200px' }}>{row.description}</td>
-                        <td style={{ padding: '10px', fontSize: '11px', color: '#64748B' }}>{row.statePartyDetails || '-'}</td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          <button 
-                            onClick={() => isDirector && !row.invoiceGenerated && updateServiceField(row.id, 'toBeBilled', row.toBeBilled === 'Yes' ? 'No' : 'Yes')}
-                            disabled={row.invoiceGenerated || !isDirector}
-                            style={{ padding: '4px 8px', fontSize: '11px', fontWeight: '600', border: '2px solid', borderRadius: '4px', cursor: row.invoiceGenerated || !isDirector ? 'not-allowed' : 'pointer', borderColor: row.toBeBilled === 'Yes' ? '#22C55E' : '#E2E8F0', backgroundColor: row.toBeBilled === 'Yes' ? '#DCFCE7' : '#FFFFFF', color: row.toBeBilled === 'Yes' ? '#166534' : '#64748B' }}
-                          >
-                            {row.toBeBilled || 'No'}
-                          </button>
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'right' }}>
-                          {row.invoiceGenerated ? (
-                            <span style={{ fontWeight: '600' }}>₹{parseFloat(row.invoiceAmount).toLocaleString('en-IN')}</span>
-                          ) : (
-                            <input 
-                              type="number" 
-                              value={row.invoiceAmount || ''} 
-                              onChange={(e) => updateServiceField(row.id, 'invoiceAmount', e.target.value)}
-                              disabled={row.invoiceGenerated}
-                              placeholder="0"
-                              style={{ width: '80px', padding: '4px', fontSize: '12px', border: '1px solid #E2E8F0', borderRadius: '4px', textAlign: 'right' }}
-                            />
-                          )}
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          {row.invoiceGenerated ? (
-                            <span style={{ fontSize: '11px', color: '#2874A6', fontWeight: '600', cursor: 'pointer' }} onClick={() => generateServiceInvoicePDF(row)}>
-                              {row.invoiceNo}
-                            </span>
-                          ) : (
-                            !isDirector && row.toBeBilled === 'Yes' && row.invoiceAmount ? (
-                              <button onClick={() => generateServiceInvoice(row)} style={{ padding: '4px 8px', fontSize: '11px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                Generate
-                              </button>
-                            ) : '-'
-                          )}
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          {row.invoiceGenerated ? (
-                            <span style={{ padding: '3px 8px', fontSize: '10px', fontWeight: '600', borderRadius: '9999px', backgroundColor: row.invoiceStatus === 'Approved' ? '#DCFCE7' : row.invoiceStatus === 'Need Edits' ? '#FEF3C7' : '#E0E7FF', color: row.invoiceStatus === 'Approved' ? '#166534' : row.invoiceStatus === 'Need Edits' ? '#92400E' : '#3730A3' }}>
-                              {row.invoiceStatus}
-                            </span>
-                          ) : '-'}
-                        </td>
-                        <td style={{ padding: '10px', textAlign: 'center' }}>
-                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                            {isDirector && row.invoiceGenerated && row.invoiceStatus === 'Created' && (
-                              <>
-                                <button onClick={() => handleServiceApproval(row, 'approve')} style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: '#22C55E', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                  <Check size={12} />
-                                </button>
-                                <button onClick={() => {
-                                  const remarks = prompt('Enter remarks for edits needed:');
-                                  if (remarks) handleServiceApproval(row, 'needsEdit', remarks);
-                                }} style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: '#F59E0B', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                  <Edit2 size={12} />
-                                </button>
-                              </>
-                            )}
-                            {!isDirector && !row.invoiceGenerated && (
-                              <button onClick={() => deleteServiceRow(row.id)} style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: '#EF4444', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                <Trash2 size={12} />
-                              </button>
-                            )}
-                            {row.invoiceGenerated && row.invoiceStatus === 'Approved' && (
-                              <button onClick={() => generateServiceInvoicePDF(row)} style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                                <Printer size={12} />
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))
+              );
+            })
           )}
         </Card>
         
-        {/* Add Service Modal */}
-        <Modal isOpen={showAddServiceModal} onClose={() => setShowAddServiceModal(false)} title="Add New Service" width="500px">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>Party Name *</label>
-              <input 
-                list="partyList"
-                value={serviceForm.partyName}
-                onChange={(e) => {
-                  const name = e.target.value;
-                  setServiceForm(prev => ({ ...prev, partyName: name }));
-                  // Auto-fill state from party master
-                  const details = getPartyDetailsForService(name);
-                  if (details.state) {
-                    setServiceForm(prev => ({ ...prev, statePartyDetails: details.state }));
-                  }
-                }}
-                placeholder="Select or type party name"
-                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
-              />
-              <datalist id="partyList">
-                {Object.values(partyMaster).map((p, i) => (
-                  <option key={i} value={p.partyName} />
-                ))}
-              </datalist>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>State</label>
-              <input 
-                value={serviceForm.statePartyDetails}
-                onChange={(e) => setServiceForm(prev => ({ ...prev, statePartyDetails: e.target.value }))}
-                placeholder="State"
-                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
-              />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>Service Type *</label>
-              <select 
-                value={serviceForm.serviceType}
-                onChange={(e) => setServiceForm(prev => ({ ...prev, serviceType: e.target.value }))}
-                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
-              >
-                {serviceTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>Description *</label>
-              <textarea 
-                value={serviceForm.description}
-                onChange={(e) => setServiceForm(prev => ({ ...prev, description: e.target.value }))}
-                placeholder="Service description..."
-                rows={3}
-                style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px', resize: 'vertical' }}
-              />
-            </div>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>Date *</label>
-                <input 
-                  type="date"
-                  value={serviceForm.date}
-                  onChange={(e) => setServiceForm(prev => ({ ...prev, date: e.target.value }))}
-                  style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
-                />
+        {filteredTabData.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '16px' }}>
+            <div style={{ backgroundColor: '#F0FDF4', padding: '16px 24px', borderRadius: '10px', border: '2px solid #86EFAC' }}>
+              <div style={{ fontSize: '12px', color: '#166534', fontWeight: '600', marginBottom: '4px' }}>To Be Billed Total</div>
+              <div style={{ fontSize: '18px', fontWeight: '700', color: '#059669' }}>
+                {formatCurrency(filteredTabData.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || parseFloat(r.invoiceAmount) || 0), 0))}
               </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#475569', marginBottom: '6px' }}>Amount (Base) *</label>
-                <input 
-                  type="number"
-                  value={serviceForm.amount}
-                  onChange={(e) => setServiceForm(prev => ({ ...prev, amount: e.target.value }))}
-                  placeholder="0"
-                  style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}
-                />
+            </div>
+          </div>
+        )}
+        
+        <Modal isOpen={showAddServiceModal} onClose={() => setShowAddServiceModal(false)} title="➕ Add Service Entry" width="700px">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Date *</label>
+                <input type="date" id="svcDate" defaultValue={new Date().toISOString().split('T')[0]} style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Time</label>
+                <input type="text" id="svcTime" placeholder="HH:MM" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>State</label>
+                <input type="text" id="svcState" placeholder="Maharashtra" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Party Name *</label>
+                <input list="svcPartyList" id="svcParty" placeholder="Party name" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+                <datalist id="svcPartyList">{Object.values(partyMaster).map((p, i) => <option key={i} value={p.partyName} />)}</datalist>
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Sender Name</label>
+                <input type="text" id="svcSender" placeholder="Sender" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Campaign Name / Service Type *</label>
+              <input type="text" id="svcCampaign" placeholder="e.g. Podcast Production, Video Editing" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Subject / Description *</label>
+              <textarea id="svcSubject" rows={2} placeholder="Description" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Email</label>
+                <input type="email" id="svcEmail" placeholder="email@example.com" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', marginBottom: '4px' }}>Amount (without GST)</label>
+                <input type="number" id="svcAmount" placeholder="0" style={{ width: '100%', padding: '8px', border: '1.5px solid #E2E8F0', borderRadius: '6px' }} />
               </div>
             </div>
             <div style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
               <ActionButton label="Cancel" variant="secondary" onClick={() => setShowAddServiceModal(false)} />
-              <ActionButton label="Add Service" icon={Plus} onClick={handleAddService} />
+              <ActionButton label="Add Entry" icon={Plus} onClick={() => {
+                const party = document.getElementById('svcParty')?.value?.trim();
+                const campaign = document.getElementById('svcCampaign')?.value?.trim();
+                const subject = document.getElementById('svcSubject')?.value?.trim();
+                if (!party || !campaign || !subject) { alert('Fill required fields'); return; }
+                
+                const newEntry = {
+                  id: Date.now().toString(),
+                  sno: safeServicesData.length + 1,
+                  date: document.getElementById('svcDate')?.value || new Date().toISOString().split('T')[0],
+                  time: document.getElementById('svcTime')?.value || '',
+                  month: '',
+                  statePartyDetails: document.getElementById('svcState')?.value || '',
+                  partyName: party,
+                  senderName: document.getElementById('svcSender')?.value || '',
+                  campaignName: campaign,
+                  subject: subject,
+                  emailId: document.getElementById('svcEmail')?.value || '',
+                  additionalEmails: [],
+                  toBeBilled: 'Not Yet',
+                  invoiceAmount: document.getElementById('svcAmount')?.value || '',
+                  cgst: '', sgst: '', igst: '', totalWithGst: '',
+                  invoiceType: 'Individual',
+                  combinationCode: 'NA',
+                  invoiceNo: '', invoiceDate: '', invoiceTotalAmount: '',
+                  invoiceGenerated: false,
+                  invoiceStatus: 'Pending',
+                  mailingSent: 'No',
+                  mailerUploaded: false,
+                  editComments: '',
+                  isService: true
+                };
+                setServicesData(prev => [...prev, newEntry]);
+                setExpandedServiceParties(prev => new Set([...prev, party]));
+                setShowAddServiceModal(false);
+              }} />
             </div>
           </div>
         </Modal>
@@ -3912,36 +3989,62 @@ ${generateInvoiceHtml(row)}
     );
   };
 
+
   // ============================================
   // EXPORT FUNCTIONS
   // ============================================
   
-  // Export Invoice Register to Excel
+  // Export Invoice Register to Excel - EXACT match to UI
   const exportInvoiceRegisterToExcel = (invoices) => {
-    const exportData = invoices.map(inv => {
-      const cnMatch = inv.cnMatch;
-      const cnAmount = cnMatch ? Math.abs(parseFloat(cnMatch.isSystemCN ? cnMatch.totalAmount : cnMatch.credit) || 0) : 0;
-      const receiptInfo = receipts.filter(r => r.invoiceNo === inv.invoiceNo);
-      const totalReceived = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-      const totalTds = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
-      const balance = inv.totalAmount - totalReceived - totalTds - cnAmount;
+    const exportData = [];
+    
+    // Group by party like in UI
+    const groupedByParty = {};
+    invoices.forEach(inv => {
+      const party = inv.partyName || 'Unknown';
+      if (!groupedByParty[party]) groupedByParty[party] = [];
+      groupedByParty[party].push(inv);
+    });
+    
+    Object.keys(groupedByParty).sort().forEach(party => {
+      const partyInvoices = groupedByParty[party];
       
-      return {
-        'Invoice No': inv.invoiceNo,
-        'Date': inv.date,
-        'Party Name': inv.partyName,
-        'Type': inv.isService ? 'Service' : (inv.invoiceType || 'Individual'),
-        'Source': inv.source || 'Campaign',
-        'Amount': inv.totalAmount,
-        'Received': totalReceived,
-        'TDS': totalTds,
-        'CN Amount': cnAmount,
-        'Balance': balance,
-        'Invoice Status': inv.invoiceStatus,
-        'Receipt Status': balance <= 0 ? 'Paid' : 'Pending',
-        'Receipt No': receiptInfo.map(r => r.receiptNo).join(', '),
-        'CN No': cnMatch ? (cnMatch.isSystemCN ? cnMatch.creditNoteNo : cnMatch.vchNo) : ''
-      };
+      partyInvoices.forEach(inv => {
+        const cnMatch = inv.cnMatch;
+        const cnAmount = cnMatch ? Math.abs(parseFloat(cnMatch.isSystemCN ? cnMatch.totalAmount : cnMatch.credit) || 0) : 0;
+        const receiptInfo = receipts.filter(r => r.invoiceNo === inv.invoiceNo);
+        const totalReceived = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+        const totalTds = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+        const balance = inv.totalAmount - totalReceived - totalTds - cnAmount;
+        
+        // Determine receipt status exactly as shown in UI
+        let receiptStatus = 'Pending';
+        if (balance <= 0) {
+          if (cnAmount >= inv.totalAmount) {
+            receiptStatus = 'Cancelled';
+          } else {
+            receiptStatus = 'Paid';
+          }
+        } else if (totalReceived > 0 || totalTds > 0) {
+          receiptStatus = 'Partial';
+        }
+        
+        exportData.push({
+          'Party Name': party,
+          'Invoice No': inv.invoiceNo,
+          'Date': formatDate(inv.date),
+          'Type': inv.isService ? 'Service' : (inv.invoiceType || 'Individual'),
+          'Amount': inv.totalAmount,
+          'Received': totalReceived || '',
+          'TDS': totalTds || '',
+          'CN Amount': cnAmount || '',
+          'Balance': balance,
+          'Invoice Status': inv.invoiceStatus,
+          'Receipt Status': receiptStatus,
+          'Receipt No': receiptInfo.map(r => r.receiptNo).join(', '),
+          'CN No': cnMatch ? (cnMatch.isSystemCN ? cnMatch.creditNoteNo : cnMatch.vchNo) : ''
+        });
+      });
     });
     
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -3950,254 +4053,248 @@ ${generateInvoiceHtml(row)}
     XLSX.writeFile(wb, `Invoice_Register_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export All Party Ledgers to Excel
+  // Export single Party Ledger to Excel - EXACT match to print
+  const exportSingleLedgerToExcel = (ledgerEntries, totals, partyName, partyState, partyGstin) => {
+    const exportData = [];
+    
+    // Header
+    exportData.push({ A: partyName, B: '', C: '', D: '', E: '', F: '', G: '', H: '', I: '' });
+    exportData.push({ A: 'Ledger Account', B: '', C: '', D: '', E: '', F: '', G: '', H: '', I: '' });
+    if (partyState) exportData.push({ A: `State: ${partyState}`, B: '', C: '', D: '', E: '', F: '', G: '', H: '', I: '' });
+    if (partyGstin) exportData.push({ A: `GSTIN: ${partyGstin}`, B: '', C: '', D: '', E: '', F: '', G: '', H: '', I: '' });
+    exportData.push({});
+    
+    // Column headers
+    exportData.push({
+      A: 'Date', B: 'Particulars', C: 'Vch Type', D: 'Vch No.',
+      E: 'Debit', F: 'Credit', G: 'Amt Received', H: 'TDS', I: 'Balance'
+    });
+    
+    // Data rows with sub-rows
+    ledgerEntries.forEach(entry => {
+      exportData.push({
+        A: entry.date || '',
+        B: entry.particular || '',
+        C: entry.vchType || '',
+        D: entry.vchNo || '',
+        E: entry.debit || '',
+        F: entry.credit || '',
+        G: entry.amountReceived || '',
+        H: entry.tds || '',
+        I: entry.balance
+      });
+      
+      // Add sub-rows (campaigns, narration)
+      if (entry.subRows && entry.subRows.length > 0) {
+        entry.subRows.forEach(sub => {
+          exportData.push({
+            A: '',
+            B: `    → ${sub.particular || sub.campaignName || sub.subject || ''}`,
+            C: '', D: '',
+            E: sub.debit || '',
+            F: sub.credit || '',
+            G: '', H: '', I: ''
+          });
+        });
+      }
+    });
+    
+    // Totals
+    exportData.push({});
+    exportData.push({
+      A: '', B: 'TOTAL', C: '', D: '',
+      E: totals.debit, F: totals.credit,
+      G: totals.received, H: totals.tds, I: ''
+    });
+    exportData.push({
+      A: '', B: 'Closing Balance', C: '', D: '',
+      E: totals.balance > 0 ? totals.balance : '',
+      F: totals.balance < 0 ? Math.abs(totals.balance) : '',
+      G: '', H: '', I: totals.balance
+    });
+    
+    const ws = XLSX.utils.json_to_sheet(exportData, { skipHeader: true });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Ledger');
+    XLSX.writeFile(wb, `${partyName.substring(0, 20)}_Ledger_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+  
+  // Export All Party Ledgers - EXACT match to print with sub-rows
   const exportAllLedgersToExcel = () => {
     const wb = XLSX.utils.book_new();
+    let sheetsAdded = 0;
     
     partiesForLedger.forEach(partyInfo => {
       const party = partyInfo.partyName;
       const partyState = partyInfo.normalizedState;
       const opening = openingBalances[party] || 0;
       
-      // Get invoices for this party+state
+      // Get invoices
       const partyInvoices = [...safeMasterData, ...safeServicesData].filter(r => 
-        matchParty(r.partyName, party) && 
-        r.invoiceGenerated && 
-        r.invoiceStatus === 'Approved' &&
+        matchParty(r.partyName, party) && r.invoiceGenerated && r.invoiceStatus === 'Approved' &&
         (!partyState || normalizeStateName(r.statePartyDetails) === partyState)
       );
       
-      // Get historical entries
-      const historicalInvoices = !partyState ? safeLedgerEntries.filter(e => 
-        matchParty(e.partyName, party) && e.isHistorical && e.type !== 'creditnote'
-      ) : [];
-      
-      // Get receipts
-      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party));
-      
-      // Get credit notes
-      const partyCNs = creditNotes.filter(cn => matchParty(cn.partyName, party));
-      
-      // Build ledger entries
-      const entries = [];
-      let runningBalance = opening;
-      
-      if (opening !== 0) {
-        entries.push({
-          Date: '', Particular: 'Opening Balance', 'Vch Type': '', 'Vch No': '',
-          Debit: opening > 0 ? opening : '', Credit: opening < 0 ? Math.abs(opening) : '',
-          'Amount Received': '', 'TDS': '', Balance: opening
-        });
-      }
-      
-      // Add invoices
+      // Group invoices
       const invoiceMap = new Map();
       partyInvoices.forEach(row => {
         if (!invoiceMap.has(row.invoiceNo)) {
-          invoiceMap.set(row.invoiceNo, { date: row.invoiceDate, amount: parseFloat(row.invoiceTotalAmount) || 0 });
+          invoiceMap.set(row.invoiceNo, { invoiceNo: row.invoiceNo, invoiceDate: row.invoiceDate, campaigns: [row] });
+        } else {
+          invoiceMap.get(row.invoiceNo).campaigns.push(row);
         }
       });
       
-      invoiceMap.forEach((inv, invoiceNo) => {
-        runningBalance += inv.amount;
-        const invReceipts = partyReceipts.filter(r => r.invoiceNo === invoiceNo);
-        const totalReceived = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-        const totalTds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+      const invoiceNos = new Set(Array.from(invoiceMap.keys()));
+      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party) && (!partyState || invoiceNos.has(r.invoiceNo)));
+      const partyCNs = creditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyState || invoiceNos.has(cn.invoiceNo)));
+      
+      // Historical entries
+      const historicalInvoices = !partyState ? safeLedgerEntries.filter(e => 
+        matchParty(e.partyName, party) && e.isHistorical && !e.vchNo?.toUpperCase().startsWith('CN')
+      ) : [];
+      const historicalCNs = !partyState ? safeLedgerEntries.filter(e => 
+        matchParty(e.partyName, party) && e.isHistorical && e.vchNo?.toUpperCase().startsWith('CN')
+      ) : [];
+      
+      const exportData = [];
+      let runningBalance = opening;
+      let totalDebit = 0, totalCredit = 0, totalReceived = 0, totalTds = 0;
+      
+      // Header
+      exportData.push({ Date: party });
+      exportData.push({ Date: 'Ledger Account' });
+      if (partyState) exportData.push({ Date: `State: ${partyInfo.state}` });
+      if (partyInfo.gstin) exportData.push({ Date: `GSTIN: ${partyInfo.gstin}` });
+      exportData.push({});
+      exportData.push({ Date: 'Date', Particulars: 'Particulars', VchType: 'Vch Type', VchNo: 'Vch No.', Debit: 'Debit', Credit: 'Credit', AmtReceived: 'Amt Received', TDS: 'TDS', Balance: 'Balance' });
+      
+      // Opening balance
+      if (opening !== 0) {
+        exportData.push({ Date: '', Particulars: 'Opening Balance', VchType: '', VchNo: '', Debit: opening > 0 ? opening : '', Credit: opening < 0 ? Math.abs(opening) : '', AmtReceived: '', TDS: '', Balance: opening });
+        if (opening > 0) totalDebit += opening; else totalCredit += Math.abs(opening);
+      }
+      
+      // Invoice entries with campaigns
+      Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate)).forEach(inv => {
+        const amount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceTotalAmount) || 0), 0);
+        const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
+        const invCNs = partyCNs.filter(cn => cn.invoiceNo === inv.invoiceNo);
+        const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+        const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
         
-        entries.push({
-          Date: formatDate(inv.date), Particular: party, 'Vch Type': 'Sales', 'Vch No': invoiceNo,
-          Debit: inv.amount, Credit: '', 'Amount Received': totalReceived || '', 'TDS': totalTds || '', Balance: runningBalance
+        runningBalance += amount;
+        totalDebit += amount;
+        
+        exportData.push({ Date: formatDate(inv.invoiceDate), Particulars: party, VchType: 'Sales', VchNo: inv.invoiceNo, Debit: amount, Credit: '', AmtReceived: received || '', TDS: tds || '', Balance: runningBalance });
+        
+        // Campaign sub-rows
+        inv.campaigns.forEach(c => {
+          exportData.push({ Date: '', Particulars: `    → ${c.campaignName || c.subject || 'Service'}`, VchType: '', VchNo: '', Debit: '', Credit: '', AmtReceived: '', TDS: '', Balance: '' });
         });
         
-        if (totalReceived > 0 || totalTds > 0) {
-          runningBalance -= (totalReceived + totalTds);
+        if (received > 0 || tds > 0) {
+          runningBalance -= (received + tds);
+          totalReceived += received;
+          totalTds += tds;
+          totalCredit += (received + tds);
         }
+        
+        // CN entries
+        invCNs.forEach(cn => {
+          const cnAmt = Math.abs(parseFloat(cn.totalAmount) || 0);
+          runningBalance -= cnAmt;
+          totalCredit += cnAmt;
+          exportData.push({ Date: formatDate(cn.date), Particulars: `Credit Note - ${cn.reason || 'Adjustment'}`, VchType: 'Credit Note', VchNo: cn.creditNoteNo, Debit: '', Credit: cnAmt, AmtReceived: '', TDS: '', Balance: runningBalance });
+        });
       });
       
-      // Add historical invoices
+      // Historical entries
       historicalInvoices.forEach(e => {
         const debit = parseFloat(e.debit) || 0;
         const credit = parseFloat(e.credit) || 0;
         runningBalance += debit - credit;
-        entries.push({
-          Date: formatDate(e.date), Particular: e.particular || party, 'Vch Type': e.vchType || 'Sales', 'Vch No': e.vchNo || '',
-          Debit: debit || '', Credit: credit || '', 'Amount Received': '', 'TDS': '', Balance: runningBalance
-        });
+        totalDebit += debit;
+        totalCredit += credit;
+        exportData.push({ Date: formatDate(e.date), Particulars: e.particular || party, VchType: e.vchType || 'Sales', VchNo: e.vchNo || '', Debit: debit || '', Credit: credit || '', AmtReceived: '', TDS: '', Balance: runningBalance });
       });
       
-      if (entries.length > 0) {
-        // Create sheet name (max 31 chars, no special chars)
+      historicalCNs.forEach(e => {
+        const credit = Math.abs(parseFloat(e.credit) || parseFloat(e.debit) || 0);
+        runningBalance -= credit;
+        totalCredit += credit;
+        exportData.push({ Date: formatDate(e.date), Particulars: e.particular || 'Credit Note', VchType: 'Credit Note', VchNo: e.vchNo || '', Debit: '', Credit: credit, AmtReceived: '', TDS: '', Balance: runningBalance });
+      });
+      
+      // Totals
+      exportData.push({});
+      exportData.push({ Date: '', Particulars: 'TOTAL', VchType: '', VchNo: '', Debit: totalDebit, Credit: totalCredit, AmtReceived: totalReceived, TDS: totalTds, Balance: '' });
+      exportData.push({ Date: '', Particulars: 'Closing Balance', VchType: '', VchNo: '', Debit: runningBalance > 0 ? runningBalance : '', Credit: runningBalance < 0 ? Math.abs(runningBalance) : '', AmtReceived: '', TDS: '', Balance: runningBalance });
+      
+      if (exportData.length > 7) {
         let sheetName = party.substring(0, 25).replace(/[\\\/\*\?\[\]:]/g, '');
         if (partyState) sheetName += '-' + partyState.substring(0, 4);
+        let uniqueName = sheetName;
+        let counter = 1;
+        while (wb.SheetNames.includes(uniqueName)) uniqueName = sheetName.substring(0, 27) + counter++;
         
-        const ws = XLSX.utils.json_to_sheet(entries);
-        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        const ws = XLSX.utils.json_to_sheet(exportData, { skipHeader: true });
+        XLSX.utils.book_append_sheet(wb, ws, uniqueName);
+        sheetsAdded++;
       }
     });
     
-    if (wb.SheetNames.length === 0) {
-      alert('No ledger data to export');
-      return;
-    }
-    
-    XLSX.writeFile(wb, `All_Party_Ledgers_${new Date().toISOString().split('T')[0]}.xlsx`);
+    if (sheetsAdded === 0) { alert('No ledger data'); return; }
+    XLSX.writeFile(wb, `All_Ledgers_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export Receipt Register to Excel
+  // Export Receipt Register - includes CNs
   const exportReceiptRegisterToExcel = () => {
-    const exportData = safeReceipts.map(r => ({
-      'Receipt No': r.receiptNo,
-      'Date': r.date,
+    const receiptData = safeReceipts.map(r => ({
+      'Type': 'Receipt',
+      'Voucher No': r.receiptNo,
+      'Date': formatDate(r.date),
       'Party Name': r.partyName,
-      'Invoice No': r.invoiceNo,
-      'Amount Received': parseFloat(r.amount) || 0,
-      'TDS Amount': parseFloat(r.tdsAmount) || 0,
+      'Against Invoice': r.invoiceNo,
+      'Amount': parseFloat(r.amount) || 0,
+      'TDS': parseFloat(r.tdsAmount) || 0,
       'Total': (parseFloat(r.amount) || 0) + (parseFloat(r.tdsAmount) || 0),
       'Payment Mode': r.paymentMode || 'Bank Transfer',
       'Narration': r.narration || ''
     }));
     
+    const cnData = safeCreditNotes.map(cn => ({
+      'Type': 'Credit Note',
+      'Voucher No': cn.creditNoteNo,
+      'Date': formatDate(cn.date),
+      'Party Name': cn.partyName,
+      'Against Invoice': cn.invoiceNo,
+      'Amount': parseFloat(cn.totalAmount) || 0,
+      'TDS': '',
+      'Total': parseFloat(cn.totalAmount) || 0,
+      'Payment Mode': '',
+      'Narration': cn.reason || ''
+    }));
+    
+    const exportData = [...receiptData, ...cnData];
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Receipt Register');
-    XLSX.writeFile(wb, `Receipt_Register_${new Date().toISOString().split('T')[0]}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, 'Receipt & CN Register');
+    XLSX.writeFile(wb, `Receipt_CN_Register_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
   // Generate Receipt Voucher PDF
   const generateReceiptVoucher = (receipt) => {
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Receipt Voucher - ${receipt.receiptNo}</title>
-  <style>
-    @media print { @page { size: A5; margin: 10mm; } }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 12px; padding: 20px; }
-    .voucher { max-width: 600px; margin: 0 auto; border: 2px solid #000; }
-    .header { text-align: center; padding: 15px; border-bottom: 2px solid #000; background: #f5f5f5; }
-    .title { font-size: 18px; font-weight: bold; color: #1a5276; }
-    .company { font-size: 14px; font-weight: bold; margin-top: 5px; }
-    .details { padding: 15px; }
-    .row { display: flex; margin-bottom: 10px; }
-    .label { width: 140px; font-weight: bold; color: #475569; }
-    .value { flex: 1; }
-    .amount-box { background: #e8f4fd; padding: 15px; margin: 15px 0; border-radius: 8px; text-align: center; }
-    .amount { font-size: 24px; font-weight: bold; color: #1a5276; }
-    .footer { padding: 15px; border-top: 1px solid #ddd; display: flex; justify-content: space-between; }
-    .signature { text-align: center; margin-top: 40px; }
-    .signature-line { border-top: 1px solid #000; width: 150px; margin: 0 auto; padding-top: 5px; }
-  </style>
-</head>
-<body>
-  <div class="voucher">
-    <div class="header">
-      <div class="title">RECEIPT VOUCHER</div>
-      <div class="company">${companyConfig.name}</div>
-      <div style="font-size: 10px; color: #666; margin-top: 3px;">${companyConfig.address}, ${companyConfig.city}</div>
-    </div>
-    <div class="details">
-      <div class="row"><div class="label">Receipt No:</div><div class="value" style="font-weight: bold; color: #1a5276;">${receipt.receiptNo}</div></div>
-      <div class="row"><div class="label">Date:</div><div class="value">${formatDate(receipt.date)}</div></div>
-      <div class="row"><div class="label">Received From:</div><div class="value" style="font-weight: bold;">${receipt.partyName}</div></div>
-      <div class="row"><div class="label">Against Invoice:</div><div class="value">${receipt.invoiceNo}</div></div>
-      <div class="row"><div class="label">Payment Mode:</div><div class="value">${receipt.paymentMode || 'Bank Transfer'}</div></div>
-      ${receipt.narration ? `<div class="row"><div class="label">Narration:</div><div class="value">${receipt.narration}</div></div>` : ''}
-      
-      <div class="amount-box">
-        <div style="font-size: 12px; color: #666;">Amount Received</div>
-        <div class="amount">₹${(parseFloat(receipt.amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-        ${receipt.tdsAmount && parseFloat(receipt.tdsAmount) > 0 ? `<div style="font-size: 11px; color: #666; margin-top: 5px;">TDS Deducted: ₹${parseFloat(receipt.tdsAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>` : ''}
-        <div style="font-size: 11px; margin-top: 8px;"><strong>Total:</strong> ₹${((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0)).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-      </div>
-      
-      <div style="font-size: 11px; color: #666; margin-top: 10px;">
-        <strong>Amount in words:</strong> ${numberToWords((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}
-      </div>
-    </div>
-    <div class="footer">
-      <div class="signature">
-        <div class="signature-line">Receiver's Signature</div>
-      </div>
-      <div class="signature">
-        <div class="signature-line">Authorised Signatory</div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-    
+    const html = `<!DOCTYPE html><html><head><title>Receipt - ${receipt.receiptNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#f5f5f5}.title{font-size:18px;font-weight:bold;color:#1a5276}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#e8f4fd;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#1a5276}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">RECEIPT VOUCHER</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Receipt No:</div><div class="value" style="font-weight:bold;color:#1a5276">${receipt.receiptNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(receipt.date)}</div></div><div class="row"><div class="label">Received From:</div><div class="value" style="font-weight:bold">${receipt.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${receipt.invoiceNo}</div></div><div class="row"><div class="label">Payment Mode:</div><div class="value">${receipt.paymentMode || 'Bank Transfer'}</div></div>${receipt.narration ? `<div class="row"><div class="label">Narration:</div><div class="value">${receipt.narration}</div></div>` : ''}<div class="amount-box"><div style="font-size:12px;color:#666">Amount Received</div><div class="amount">₹${(parseFloat(receipt.amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>${receipt.tdsAmount && parseFloat(receipt.tdsAmount) > 0 ? `<div style="font-size:11px;color:#666;margin-top:5px">TDS: ₹${parseFloat(receipt.tdsAmount).toLocaleString('en-IN')}</div>` : ''}<div style="font-size:11px;margin-top:8px"><strong>Total:</strong> ₹${((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0)).toLocaleString('en-IN')}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}</div></div><div class="footer"><div class="signature"><div class="signature-line">Receiver's Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
     const printWindow = window.open('', '_blank');
     printWindow.document.write(html);
     printWindow.document.close();
     printWindow.print();
   };
   
-  // Generate Credit Note Voucher PDF
+  // Generate CN Voucher PDF
   const generateCreditNoteVoucher = (cn) => {
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Credit Note - ${cn.creditNoteNo}</title>
-  <style>
-    @media print { @page { size: A5; margin: 10mm; } }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 12px; padding: 20px; }
-    .voucher { max-width: 600px; margin: 0 auto; border: 2px solid #000; }
-    .header { text-align: center; padding: 15px; border-bottom: 2px solid #000; background: #fef3c7; }
-    .title { font-size: 18px; font-weight: bold; color: #92400e; }
-    .company { font-size: 14px; font-weight: bold; margin-top: 5px; }
-    .details { padding: 15px; }
-    .row { display: flex; margin-bottom: 10px; }
-    .label { width: 140px; font-weight: bold; color: #475569; }
-    .value { flex: 1; }
-    .amount-box { background: #fef3c7; padding: 15px; margin: 15px 0; border-radius: 8px; text-align: center; }
-    .amount { font-size: 24px; font-weight: bold; color: #92400e; }
-    .footer { padding: 15px; border-top: 1px solid #ddd; display: flex; justify-content: space-between; }
-    .signature { text-align: center; margin-top: 40px; }
-    .signature-line { border-top: 1px solid #000; width: 150px; margin: 0 auto; padding-top: 5px; }
-  </style>
-</head>
-<body>
-  <div class="voucher">
-    <div class="header">
-      <div class="title">CREDIT NOTE</div>
-      <div class="company">${companyConfig.name}</div>
-      <div style="font-size: 10px; color: #666; margin-top: 3px;">${companyConfig.address}, ${companyConfig.city}</div>
-    </div>
-    <div class="details">
-      <div class="row"><div class="label">Credit Note No:</div><div class="value" style="font-weight: bold; color: #92400e;">${cn.creditNoteNo}</div></div>
-      <div class="row"><div class="label">Date:</div><div class="value">${formatDate(cn.date)}</div></div>
-      <div class="row"><div class="label">Party Name:</div><div class="value" style="font-weight: bold;">${cn.partyName}</div></div>
-      <div class="row"><div class="label">Against Invoice:</div><div class="value">${cn.invoiceNo}</div></div>
-      <div class="row"><div class="label">Reason:</div><div class="value">${cn.reason || 'Discount / Adjustment'}</div></div>
-      
-      <div class="amount-box">
-        <div style="font-size: 12px; color: #666;">Credit Amount</div>
-        <div class="amount">₹${(parseFloat(cn.totalAmount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>
-        <div style="font-size: 10px; color: #666; margin-top: 5px;">
-          Base: ₹${(parseFloat(cn.baseAmount) || 0).toLocaleString('en-IN')} | 
-          GST: ₹${((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0)).toLocaleString('en-IN')}
-        </div>
-      </div>
-      
-      <div style="font-size: 11px; color: #666; margin-top: 10px;">
-        <strong>Amount in words:</strong> ${numberToWords(parseFloat(cn.totalAmount) || 0)}
-      </div>
-    </div>
-    <div class="footer">
-      <div class="signature">
-        <div class="signature-line">Party Signature</div>
-      </div>
-      <div class="signature">
-        <div class="signature-line">Authorised Signatory</div>
-      </div>
-    </div>
-  </div>
-</body>
-</html>`;
-    
+    const html = `<!DOCTYPE html><html><head><title>CN - ${cn.creditNoteNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#fef3c7}.title{font-size:18px;font-weight:bold;color:#92400e}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#fef3c7;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#92400e}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">CREDIT NOTE</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Credit Note No:</div><div class="value" style="font-weight:bold;color:#92400e">${cn.creditNoteNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(cn.date)}</div></div><div class="row"><div class="label">Party Name:</div><div class="value" style="font-weight:bold">${cn.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${cn.invoiceNo}</div></div><div class="row"><div class="label">Reason:</div><div class="value">${cn.reason || 'Adjustment'}</div></div><div class="amount-box"><div style="font-size:12px;color:#666">Credit Amount</div><div class="amount">₹${(parseFloat(cn.totalAmount) || 0).toLocaleString('en-IN')}</div><div style="font-size:10px;color:#666;margin-top:5px">Base: ₹${(parseFloat(cn.baseAmount) || 0).toLocaleString('en-IN')} | GST: ₹${((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0)).toLocaleString('en-IN')}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords(parseFloat(cn.totalAmount) || 0)}</div></div><div class="footer"><div class="signature"><div class="signature-line">Party Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
     const printWindow = window.open('', '_blank');
     printWindow.document.write(html);
     printWindow.document.close();
@@ -5136,44 +5233,99 @@ ${generateInvoiceHtml(row)}
   };
 
   // ============================================
-  // RECEIPT REGISTER
+  // RECEIPT REGISTER (with filters)
   // ============================================
   
+  // Receipt parties list
+  const receiptParties = useMemo(() => {
+    const parties = new Set();
+    safeReceipts.forEach(r => parties.add(r.partyName));
+    safeCreditNotes.forEach(cn => parties.add(cn.partyName));
+    return [...parties].filter(Boolean).sort();
+  }, [safeReceipts, safeCreditNotes]);
+  
+  // Filtered receipts
+  const filteredReceipts = useMemo(() => {
+    return safeReceipts.filter(r => {
+      if (receiptFilters.party && r.partyName !== receiptFilters.party) return false;
+      if (receiptFilters.invoiceNo && !r.invoiceNo?.toLowerCase().includes(receiptFilters.invoiceNo.toLowerCase())) return false;
+      if (receiptFilters.dateFrom && r.date < receiptFilters.dateFrom) return false;
+      if (receiptFilters.dateTo && r.date > receiptFilters.dateTo) return false;
+      return true;
+    });
+  }, [safeReceipts, receiptFilters]);
+  
+  // Filtered CNs
+  const filteredCNs = useMemo(() => {
+    return safeCreditNotes.filter(cn => {
+      if (receiptFilters.party && cn.partyName !== receiptFilters.party) return false;
+      if (receiptFilters.invoiceNo && !cn.invoiceNo?.toLowerCase().includes(receiptFilters.invoiceNo.toLowerCase())) return false;
+      if (receiptFilters.dateFrom && cn.date < receiptFilters.dateFrom) return false;
+      if (receiptFilters.dateTo && cn.date > receiptFilters.dateTo) return false;
+      return true;
+    });
+  }, [safeCreditNotes, receiptFilters]);
+  
   const renderReceiptRegister = () => {
-    const sortedReceipts = [...safeReceipts].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const sortedReceipts = [...filteredReceipts].sort((a, b) => new Date(b.date) - new Date(a.date));
+    const sortedCNs = [...filteredCNs].sort((a, b) => new Date(b.date) - new Date(a.date));
     const totalReceived = sortedReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
     const totalTds = sortedReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+    const totalCN = sortedCNs.reduce((sum, cn) => sum + (parseFloat(cn.totalAmount) || 0), 0);
     
     return (
       <div style={{ padding: '20px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
             <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1E293B', marginBottom: '4px' }}>🧾 Receipt Register</h1>
-            <p style={{ fontSize: '13px', color: '#64748B' }}>All receipts and payments received</p>
+            <p style={{ fontSize: '13px', color: '#64748B' }}>All receipts, TDS, and credit notes</p>
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={exportReceiptRegisterToExcel} />
+          <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={exportReceiptRegisterToExcel} />
+        </div>
+        
+        {/* Filters */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: '10px', border: '1px solid #E2E8F0', padding: '14px 18px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+            <Filter size={18} color="#64748B" />
+            <span style={{ fontSize: '13px', fontWeight: '700', color: '#475569' }}>Filters:</span>
+            <select value={receiptFilters.party} onChange={(e) => setReceiptFilters(prev => ({ ...prev, party: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }}>
+              <option value="">All Parties</option>
+              {receiptParties.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <input type="text" placeholder="Invoice No" value={receiptFilters.invoiceNo} onChange={(e) => setReceiptFilters(prev => ({ ...prev, invoiceNo: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px', width: '140px' }} />
+            <input type="date" value={receiptFilters.dateFrom} onChange={(e) => setReceiptFilters(prev => ({ ...prev, dateFrom: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }} />
+            <span style={{ color: '#64748B' }}>to</span>
+            <input type="date" value={receiptFilters.dateTo} onChange={(e) => setReceiptFilters(prev => ({ ...prev, dateTo: e.target.value }))} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #E2E8F0', borderRadius: '8px' }} />
+            {(receiptFilters.party || receiptFilters.invoiceNo || receiptFilters.dateFrom || receiptFilters.dateTo) && (
+              <button onClick={() => setReceiptFilters({ party: '', invoiceNo: '', dateFrom: '', dateTo: '' })} style={{ padding: '8px 12px', fontSize: '13px', border: '1.5px solid #FCA5A5', borderRadius: '8px', backgroundColor: '#FEE2E2', color: '#991B1B', cursor: 'pointer' }}>
+                <X size={14} /> Clear
+              </button>
+            )}
           </div>
         </div>
         
         {/* Summary Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '20px' }}>
-          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px', border: '1px solid #E2E8F0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-            <div style={{ fontSize: '12px', fontWeight: '600', color: '#64748B', marginBottom: '8px' }}>Total Receipts</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '20px' }}>
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', padding: '20px', border: '1px solid #E2E8F0' }}>
+            <div style={{ fontSize: '12px', fontWeight: '600', color: '#64748B', marginBottom: '8px' }}>Receipts</div>
             <div style={{ fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>{sortedReceipts.length}</div>
           </div>
-          <div style={{ backgroundColor: '#F0FDF4', borderRadius: '12px', padding: '20px', border: '1px solid #BBF7D0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ backgroundColor: '#F0FDF4', borderRadius: '12px', padding: '20px', border: '1px solid #BBF7D0' }}>
             <div style={{ fontSize: '12px', fontWeight: '600', color: '#166534', marginBottom: '8px' }}>Amount Received</div>
             <div style={{ fontSize: '24px', fontWeight: '700', color: '#166534' }}>{formatCurrency(totalReceived)}</div>
           </div>
-          <div style={{ backgroundColor: '#FEF3C7', borderRadius: '12px', padding: '20px', border: '1px solid #FDE68A', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+          <div style={{ backgroundColor: '#FEF3C7', borderRadius: '12px', padding: '20px', border: '1px solid #FDE68A' }}>
             <div style={{ fontSize: '12px', fontWeight: '600', color: '#92400E', marginBottom: '8px' }}>TDS Received</div>
             <div style={{ fontSize: '24px', fontWeight: '700', color: '#92400E' }}>{formatCurrency(totalTds)}</div>
+          </div>
+          <div style={{ backgroundColor: '#FEE2E2', borderRadius: '12px', padding: '20px', border: '1px solid #FCA5A5' }}>
+            <div style={{ fontSize: '12px', fontWeight: '600', color: '#991B1B', marginBottom: '8px' }}>Credit Notes</div>
+            <div style={{ fontSize: '24px', fontWeight: '700', color: '#991B1B' }}>{formatCurrency(totalCN)}</div>
           </div>
         </div>
         
         {/* Receipts Table */}
-        <Card title="All Receipts" noPadding>
+        <Card title={`Receipts (${sortedReceipts.length})`} noPadding>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
             <thead>
               <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '2px solid #E2E8F0' }}>
@@ -5190,46 +5342,27 @@ ${generateInvoiceHtml(row)}
             </thead>
             <tbody>
               {sortedReceipts.length === 0 ? (
-                <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No receipts recorded yet</td></tr>
-              ) : (
-                sortedReceipts.map(receipt => (
-                  <tr key={receipt.id || receipt.receiptNo} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                    <td style={{ padding: '12px', fontWeight: '600', color: '#2874A6' }}>{receipt.receiptNo}</td>
-                    <td style={{ padding: '12px' }}>{formatDate(receipt.date)}</td>
-                    <td style={{ padding: '12px', fontWeight: '500' }}>{receipt.partyName}</td>
-                    <td style={{ padding: '12px', color: '#64748B' }}>{receipt.invoiceNo}</td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#166534', backgroundColor: '#F0FDF4' }}>
-                      {formatCurrency(parseFloat(receipt.amount) || 0)}
-                    </td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#92400E', backgroundColor: '#FEF3C7' }}>
-                      {formatCurrency(parseFloat(receipt.tdsAmount) || 0)}
-                    </td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700' }}>
-                      {formatCurrency((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}
-                    </td>
-                    <td style={{ padding: '12px', textAlign: 'center' }}>
-                      <span style={{ padding: '4px 8px', fontSize: '10px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#E0E7FF', color: '#3730A3' }}>
-                        {receipt.paymentMode || 'Bank Transfer'}
-                      </span>
-                    </td>
-                    <td style={{ padding: '12px', textAlign: 'center' }}>
-                      <button 
-                        onClick={() => generateReceiptVoucher(receipt)}
-                        style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        <Printer size={12} /> Print
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
+                <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No receipts found</td></tr>
+              ) : sortedReceipts.map(receipt => (
+                <tr key={receipt.id || receipt.receiptNo} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                  <td style={{ padding: '12px', fontWeight: '600', color: '#2874A6' }}>{receipt.receiptNo}</td>
+                  <td style={{ padding: '12px' }}>{formatDate(receipt.date)}</td>
+                  <td style={{ padding: '12px', fontWeight: '500' }}>{receipt.partyName}</td>
+                  <td style={{ padding: '12px', color: '#64748B' }}>{receipt.invoiceNo}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#166534', backgroundColor: '#F0FDF4' }}>{formatCurrency(parseFloat(receipt.amount) || 0)}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#92400E', backgroundColor: '#FEF3C7' }}>{formatCurrency(parseFloat(receipt.tdsAmount) || 0)}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700' }}>{formatCurrency((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}</td>
+                  <td style={{ padding: '12px', textAlign: 'center' }}><span style={{ padding: '4px 8px', fontSize: '10px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#E0E7FF', color: '#3730A3' }}>{receipt.paymentMode || 'Bank Transfer'}</span></td>
+                  <td style={{ padding: '12px', textAlign: 'center' }}><button onClick={() => generateReceiptVoucher(receipt)} style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}><Printer size={12} /> Print</button></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </Card>
         
         {/* Credit Notes Section */}
         <div style={{ marginTop: '30px' }}>
-          <Card title="Credit Notes" noPadding>
+          <Card title={`Credit Notes (${sortedCNs.length})`} noPadding>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
                 <tr style={{ backgroundColor: '#FEF3C7', borderBottom: '2px solid #FDE68A' }}>
@@ -5245,34 +5378,21 @@ ${generateInvoiceHtml(row)}
                 </tr>
               </thead>
               <tbody>
-                {safeCreditNotes.length === 0 ? (
-                  <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No credit notes recorded yet</td></tr>
-                ) : (
-                  safeCreditNotes.map(cn => (
-                    <tr key={cn.id || cn.creditNoteNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: '#FFFBEB' }}>
-                      <td style={{ padding: '12px', fontWeight: '600', color: '#92400E' }}>{cn.creditNoteNo}</td>
-                      <td style={{ padding: '12px' }}>{formatDate(cn.date)}</td>
-                      <td style={{ padding: '12px', fontWeight: '500' }}>{cn.partyName}</td>
-                      <td style={{ padding: '12px', color: '#64748B' }}>{cn.invoiceNo}</td>
-                      <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency(parseFloat(cn.baseAmount) || 0)}</td>
-                      <td style={{ padding: '12px', textAlign: 'right' }}>
-                        {formatCurrency((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0))}
-                      </td>
-                      <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#92400E' }}>
-                        {formatCurrency(parseFloat(cn.totalAmount) || 0)}
-                      </td>
-                      <td style={{ padding: '12px', fontSize: '11px', color: '#64748B' }}>{cn.reason || '-'}</td>
-                      <td style={{ padding: '12px', textAlign: 'center' }}>
-                        <button 
-                          onClick={() => generateCreditNoteVoucher(cn)}
-                          style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#92400E', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                        >
-                          <Printer size={12} /> Print
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
+                {sortedCNs.length === 0 ? (
+                  <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No credit notes found</td></tr>
+                ) : sortedCNs.map(cn => (
+                  <tr key={cn.id || cn.creditNoteNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: '#FFFBEB' }}>
+                    <td style={{ padding: '12px', fontWeight: '600', color: '#92400E' }}>{cn.creditNoteNo}</td>
+                    <td style={{ padding: '12px' }}>{formatDate(cn.date)}</td>
+                    <td style={{ padding: '12px', fontWeight: '500' }}>{cn.partyName}</td>
+                    <td style={{ padding: '12px', color: '#64748B' }}>{cn.invoiceNo}</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency(parseFloat(cn.baseAmount) || 0)}</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0))}</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#92400E' }}>{formatCurrency(parseFloat(cn.totalAmount) || 0)}</td>
+                    <td style={{ padding: '12px', fontSize: '11px', color: '#64748B' }}>{cn.reason || '-'}</td>
+                    <td style={{ padding: '12px', textAlign: 'center' }}><button onClick={() => generateCreditNoteVoucher(cn)} style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#92400E', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}><Printer size={12} /> Print</button></td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </Card>
