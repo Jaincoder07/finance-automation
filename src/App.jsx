@@ -1050,6 +1050,20 @@ export default function FinanceApp() {
     };
   }, [isLoggedIn]);
 
+  // Auto-expand service parties when servicesData loads or changes
+  useEffect(() => {
+    if (safeServicesData.length > 0) {
+      const allParties = new Set(safeServicesData.map(r => r.partyName).filter(Boolean));
+      setExpandedServiceParties(prev => {
+        // Only update if we have new parties
+        if (prev.size === 0 || prev.size !== allParties.size) {
+          return allParties;
+        }
+        return prev;
+      });
+    }
+  }, [safeServicesData]);
+
   const canEdit = userRole === 'finance';
   const isDirector = userRole === 'director';
   // ============================================
@@ -3729,7 +3743,9 @@ ${generateInvoiceHtml(row)}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
           <div>
             <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1E293B', marginBottom: '4px' }}>📋 Services Sheet</h1>
-            <p style={{ fontSize: '13px', color: '#64748B' }}>Non-campaign invoices (same workflow as Master Sheet)</p>
+            <p style={{ fontSize: '13px', color: '#64748B' }}>
+              Non-campaign invoices • Total: {safeServicesData.length} entries
+            </p>
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             {canEdit && (
@@ -3770,12 +3786,26 @@ ${generateInvoiceHtml(row)}
           </div>
         </div>
         
-        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
-          <button onClick={() => setServicesSheetTab('open')} style={{ padding: '10px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer', backgroundColor: servicesSheetTab === 'open' ? '#2874A6' : '#E2E8F0', color: servicesSheetTab === 'open' ? '#FFFFFF' : '#64748B' }}>
-            Open ({openServices.length})
-          </button>
-          <button onClick={() => setServicesSheetTab('closed')} style={{ padding: '10px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer', backgroundColor: servicesSheetTab === 'closed' ? '#22C55E' : '#E2E8F0', color: servicesSheetTab === 'closed' ? '#FFFFFF' : '#64748B' }}>
-            Closed ({closedServices.length})
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={() => setServicesSheetTab('open')} style={{ padding: '10px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer', backgroundColor: servicesSheetTab === 'open' ? '#2874A6' : '#E2E8F0', color: servicesSheetTab === 'open' ? '#FFFFFF' : '#64748B' }}>
+              Open ({openServices.length})
+            </button>
+            <button onClick={() => setServicesSheetTab('closed')} style={{ padding: '10px 20px', fontSize: '13px', fontWeight: '600', border: 'none', borderRadius: '8px', cursor: 'pointer', backgroundColor: servicesSheetTab === 'closed' ? '#22C55E' : '#E2E8F0', color: servicesSheetTab === 'closed' ? '#FFFFFF' : '#64748B' }}>
+              Closed ({closedServices.length})
+            </button>
+          </div>
+          <button 
+            onClick={() => {
+              if (expandedServiceParties.size === sortedParties.length) {
+                setExpandedServiceParties(new Set());
+              } else {
+                setExpandedServiceParties(new Set(sortedParties));
+              }
+            }} 
+            style={{ padding: '8px 16px', fontSize: '12px', fontWeight: '600', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', backgroundColor: '#F8FAFC', color: '#475569' }}
+          >
+            {expandedServiceParties.size === sortedParties.length ? 'Collapse All' : 'Expand All'}
           </button>
         </div>
         
@@ -4119,10 +4149,19 @@ ${generateInvoiceHtml(row)}
     XLSX.writeFile(wb, `${partyName.substring(0, 20)}_Ledger_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export All Party Ledgers - EXACT match to print with sub-rows
+  // Export All Party Ledgers - EXACT match to UI/print with Date, sub-rows for GST/campaigns
   const exportAllLedgersToExcel = () => {
     const wb = XLSX.utils.book_new();
     let sheetsAdded = 0;
+    
+    // Helper to get year suffix
+    const getInvoiceYearSuffix = (vchNo) => {
+      if (!vchNo) return '';
+      const parts = vchNo.split('/');
+      if (parts.length >= 3) return parts.slice(1).join('/');
+      else if (parts.length === 2) return parts.join('/');
+      return parts[parts.length - 1];
+    };
     
     partiesForLedger.forEach(partyInfo => {
       const party = partyInfo.partyName;
@@ -4139,7 +4178,12 @@ ${generateInvoiceHtml(row)}
       const invoiceMap = new Map();
       partyInvoices.forEach(row => {
         if (!invoiceMap.has(row.invoiceNo)) {
-          invoiceMap.set(row.invoiceNo, { invoiceNo: row.invoiceNo, invoiceDate: row.invoiceDate, campaigns: [row] });
+          invoiceMap.set(row.invoiceNo, { 
+            invoiceNo: row.invoiceNo, 
+            invoiceDate: row.invoiceDate, 
+            campaigns: [row],
+            statePartyDetails: row.statePartyDetails
+          });
         } else {
           invoiceMap.get(row.invoiceNo).campaigns.push(row);
         }
@@ -4157,42 +4201,111 @@ ${generateInvoiceHtml(row)}
         matchParty(e.partyName, party) && e.isHistorical && e.vchNo?.toUpperCase().startsWith('CN')
       ) : [];
       
+      // CN map for matching
+      const cnByYearSuffix = new Map();
+      partyCNs.forEach(cn => {
+        const key = getInvoiceYearSuffix(cn.invoiceNo);
+        if (key) cnByYearSuffix.set(key, cn);
+      });
+      historicalCNs.forEach(cn => {
+        const key = getInvoiceYearSuffix(cn.vchNo);
+        if (key && !cnByYearSuffix.has(key)) cnByYearSuffix.set(key, cn);
+      });
+      
       const exportData = [];
       let runningBalance = opening;
       let totalDebit = 0, totalCredit = 0, totalReceived = 0, totalTds = 0;
+      const processedCNKeys = new Set();
       
       // Header
       exportData.push({ Date: party });
       exportData.push({ Date: 'Ledger Account' });
-      if (partyState) exportData.push({ Date: `State: ${partyInfo.state}` });
+      if (partyInfo.address) exportData.push({ Date: partyInfo.address });
+      if (partyState) exportData.push({ Date: partyInfo.state });
       if (partyInfo.gstin) exportData.push({ Date: `GSTIN: ${partyInfo.gstin}` });
       exportData.push({});
-      exportData.push({ Date: 'Date', Particulars: 'Particulars', VchType: 'Vch Type', VchNo: 'Vch No.', Debit: 'Debit', Credit: 'Credit', AmtReceived: 'Amt Received', TDS: 'TDS', Balance: 'Balance' });
+      
+      // Column headers - exact match to UI
+      exportData.push({ 
+        Date: 'Date', Particular: 'Particular', VchType: 'Vch Type', VchNo: 'Vch No.', 
+        Debit: 'Debit', Credit: 'Credit', DateOfReceipt: 'Date of Receipt',
+        AmtReceived: 'Amount Received', TDS: 'TDS Received', Balance: 'Balance', PaymentStatus: 'Payment Status'
+      });
       
       // Opening balance
       if (opening !== 0) {
-        exportData.push({ Date: '', Particulars: 'Opening Balance', VchType: '', VchNo: '', Debit: opening > 0 ? opening : '', Credit: opening < 0 ? Math.abs(opening) : '', AmtReceived: '', TDS: '', Balance: opening });
+        exportData.push({ 
+          Date: '', Particular: 'Opening Balance', VchType: '', VchNo: '', 
+          Debit: opening > 0 ? opening : '', Credit: opening < 0 ? Math.abs(opening) : '',
+          DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: opening, PaymentStatus: ''
+        });
         if (opening > 0) totalDebit += opening; else totalCredit += Math.abs(opening);
       }
       
-      // Invoice entries with campaigns
+      // Invoice entries
       Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate)).forEach(inv => {
-        const amount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceTotalAmount) || 0), 0);
+        // Calculate base amount and GST
+        const baseAmount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
+        const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const cgst = isSameState ? baseAmount * 0.09 : 0;
+        const sgst = isSameState ? baseAmount * 0.09 : 0;
+        const igst = isSameState ? 0 : baseAmount * 0.18;
+        const totalAmount = baseAmount + cgst + sgst + igst;
+        
+        // Get receipt for this invoice
         const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
-        const invCNs = partyCNs.filter(cn => cn.invoiceNo === inv.invoiceNo);
         const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
         const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+        const receiptDate = invReceipts.length > 0 ? formatDate(invReceipts[0].date) : '';
         
-        runningBalance += amount;
-        totalDebit += amount;
+        // Check for CN
+        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+        const matchingCN = cnByYearSuffix.get(invYearSuffix);
+        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount || matchingCN.credit) || 0) : 0;
+        const isFullyCoveredByCN = matchingCN && cnAmount >= totalAmount;
         
-        exportData.push({ Date: formatDate(inv.invoiceDate), Particulars: party, VchType: 'Sales', VchNo: inv.invoiceNo, Debit: amount, Credit: '', AmtReceived: received || '', TDS: tds || '', Balance: runningBalance });
+        // Determine payment status
+        let paymentStatus = '';
+        let balanceAmount = totalAmount;
+        if (received > 0 || tds > 0) {
+          paymentStatus = 'Received';
+          balanceAmount = totalAmount - received - tds;
+        }
+        if (isFullyCoveredByCN) {
+          paymentStatus = 'CN Closed';
+          balanceAmount = 0;
+        }
         
-        // Campaign sub-rows
-        inv.campaigns.forEach(c => {
-          exportData.push({ Date: '', Particulars: `    → ${c.campaignName || c.subject || 'Service'}`, VchType: '', VchNo: '', Debit: '', Credit: '', AmtReceived: '', TDS: '', Balance: '' });
+        runningBalance += totalAmount;
+        totalDebit += totalAmount;
+        
+        // Main invoice row with Date
+        exportData.push({ 
+          Date: formatDate(inv.invoiceDate),
+          Particular: party, VchType: 'Sales', VchNo: inv.invoiceNo, 
+          Debit: totalAmount, Credit: '',
+          DateOfReceipt: receiptDate, AmtReceived: received || '', TDS: tds || '',
+          Balance: isFullyCoveredByCN ? '-' : (balanceAmount > 0 ? balanceAmount : '-'), 
+          PaymentStatus: paymentStatus
         });
         
+        // Sub-row: Campaign/Service names with credit (base amount breakdown)
+        exportData.push({ 
+          Date: '',
+          Particular: '    PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), 
+          VchType: '', VchNo: '', Debit: '', Credit: baseAmount,
+          DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: ''
+        });
+        
+        // Sub-row: GST breakdown
+        if (isSameState) {
+          exportData.push({ Date: '', Particular: '    CGST', VchType: '', VchNo: '', Debit: '', Credit: cgst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+          exportData.push({ Date: '', Particular: '    SGST', VchType: '', VchNo: '', Debit: '', Credit: sgst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+        } else {
+          exportData.push({ Date: '', Particular: '    IGST', VchType: '', VchNo: '', Debit: '', Credit: igst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+        }
+        
+        // Deduct receipt from balance
         if (received > 0 || tds > 0) {
           runningBalance -= (received + tds);
           totalReceived += received;
@@ -4200,13 +4313,31 @@ ${generateInvoiceHtml(row)}
           totalCredit += (received + tds);
         }
         
-        // CN entries
-        invCNs.forEach(cn => {
-          const cnAmt = Math.abs(parseFloat(cn.totalAmount) || 0);
-          runningBalance -= cnAmt;
-          totalCredit += cnAmt;
-          exportData.push({ Date: formatDate(cn.date), Particulars: `Credit Note - ${cn.reason || 'Adjustment'}`, VchType: 'Credit Note', VchNo: cn.creditNoteNo, Debit: '', Credit: cnAmt, AmtReceived: '', TDS: '', Balance: runningBalance });
-        });
+        // Add CN entry right after invoice if exists
+        if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+          processedCNKeys.add(invYearSuffix);
+          runningBalance -= cnAmount;
+          totalCredit += cnAmount;
+          
+          // CN main row with Date
+          exportData.push({ 
+            Date: matchingCN.date ? formatDate(matchingCN.date) : '',
+            Particular: party, VchType: 'Credit Note', VchNo: matchingCN.creditNoteNo || matchingCN.vchNo, 
+            Debit: '', Credit: cnAmount,
+            DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '-', PaymentStatus: ''
+          });
+          
+          // CN sub-rows with negative debit amounts (like in UI)
+          const cnBase = cnAmount / 1.18;
+          const cnTax = cnAmount - cnBase;
+          exportData.push({ Date: '', Particular: '    PROMOTIONAL TRADE EMAILER', VchType: '', VchNo: '', Debit: `₹-${cnBase.toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+          if (isSameState) {
+            exportData.push({ Date: '', Particular: '    CGST', VchType: '', VchNo: '', Debit: `₹-${(cnTax/2).toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+            exportData.push({ Date: '', Particular: '    SGST', VchType: '', VchNo: '', Debit: `₹-${(cnTax/2).toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+          } else {
+            exportData.push({ Date: '', Particular: '    IGST', VchType: '', VchNo: '', Debit: `₹-${cnTax.toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+          }
+        }
       });
       
       // Historical entries
@@ -4216,22 +4347,55 @@ ${generateInvoiceHtml(row)}
         runningBalance += debit - credit;
         totalDebit += debit;
         totalCredit += credit;
-        exportData.push({ Date: formatDate(e.date), Particulars: e.particular || party, VchType: e.vchType || 'Sales', VchNo: e.vchNo || '', Debit: debit || '', Credit: credit || '', AmtReceived: '', TDS: '', Balance: runningBalance });
-      });
-      
-      historicalCNs.forEach(e => {
-        const credit = Math.abs(parseFloat(e.credit) || parseFloat(e.debit) || 0);
-        runningBalance -= credit;
-        totalCredit += credit;
-        exportData.push({ Date: formatDate(e.date), Particulars: e.particular || 'Credit Note', VchType: 'Credit Note', VchNo: e.vchNo || '', Debit: '', Credit: credit, AmtReceived: '', TDS: '', Balance: runningBalance });
+        
+        // Check for historical receipt info
+        const histReceiptDate = e.receiptDate ? formatDate(e.receiptDate) : '';
+        const histReceived = parseFloat(e.amountReceived) || 0;
+        const histTds = parseFloat(e.tdsReceived) || 0;
+        
+        exportData.push({ 
+          Date: e.date ? formatDate(e.date) : '',
+          Particular: e.particular || party, VchType: e.vchType || 'Sales', VchNo: e.vchNo || '', 
+          Debit: debit || '', Credit: credit || '',
+          DateOfReceipt: histReceiptDate, AmtReceived: histReceived || '', TDS: histTds || '',
+          Balance: runningBalance, PaymentStatus: e.paymentStatus || ''
+        });
+        
+        // Add sub-rows if they exist
+        if (e.subRows && Array.isArray(e.subRows)) {
+          e.subRows.forEach(sub => {
+            exportData.push({ 
+              Date: '',
+              Particular: `    ${sub.particular || ''}`, VchType: '', VchNo: '', 
+              Debit: sub.debit || '', Credit: sub.credit || '',
+              DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: ''
+            });
+          });
+        }
+        
+        if (histReceived > 0 || histTds > 0) {
+          runningBalance -= (histReceived + histTds);
+          totalReceived += histReceived;
+          totalTds += histTds;
+        }
       });
       
       // Totals
       exportData.push({});
-      exportData.push({ Date: '', Particulars: 'TOTAL', VchType: '', VchNo: '', Debit: totalDebit, Credit: totalCredit, AmtReceived: totalReceived, TDS: totalTds, Balance: '' });
-      exportData.push({ Date: '', Particulars: 'Closing Balance', VchType: '', VchNo: '', Debit: runningBalance > 0 ? runningBalance : '', Credit: runningBalance < 0 ? Math.abs(runningBalance) : '', AmtReceived: '', TDS: '', Balance: runningBalance });
+      exportData.push({ 
+        Date: '',
+        Particular: 'TOTAL', VchType: '', VchNo: '', 
+        Debit: totalDebit, Credit: totalCredit,
+        DateOfReceipt: '', AmtReceived: totalReceived, TDS: totalTds, Balance: '', PaymentStatus: ''
+      });
+      exportData.push({ 
+        Date: '',
+        Particular: 'Closing Balance', VchType: '', VchNo: '', 
+        Debit: runningBalance > 0 ? runningBalance : '', Credit: runningBalance < 0 ? Math.abs(runningBalance) : '',
+        DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: runningBalance, PaymentStatus: ''
+      });
       
-      if (exportData.length > 7) {
+      if (exportData.length > 10) {
         let sheetName = party.substring(0, 25).replace(/[\\\/\*\?\[\]:]/g, '');
         if (partyState) sheetName += '-' + partyState.substring(0, 4);
         let uniqueName = sheetName;
