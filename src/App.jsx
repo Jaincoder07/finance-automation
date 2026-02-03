@@ -2667,7 +2667,7 @@ ${companyConfig.email}`;
       </table>
       <div style="padding: 10px 12px; border: 1px solid #000; border-top: none; background: #fafafa;"><div style="color: #666; font-size: 11px; margin-bottom: 3px;">Amount Chargeable (in words)</div><div style="font-weight: bold; font-size: 13px;">${numberToWords(grandTotal)}</div></div>
       <div style="display: flex; border-top: 2px solid #000;">
-        <div style="flex: 1; padding: 10px 12px; border-right: 2px solid #000; font-size: 11px;"><div><strong>Company's PAN:</strong> ${companyConfig.pan}</div></div>
+        <div style="flex: 1; padding: 10px 12px; border-right: 2px solid #000; font-size: 11px;"><div><strong>Company's PAN:</strong> ${companyConfig.pan}</div><div style="margin-top: 4px;"><strong>MSME Reg. No.:</strong> UDYAM-MH-19-0057219</div></div>
         <div style="flex: 1.2; padding: 10px 12px; font-size: 11px;">
           <div style="font-weight: bold; margin-bottom: 6px; color: #1a5276;">Company's Bank Details</div>
           <div style="line-height: 1.5;"><strong>A/c Holder:</strong> ${companyConfig.bank.holder}<br><strong>Bank:</strong> ${companyConfig.bank.name}<br><strong>A/c No.:</strong> ${companyConfig.bank.account}<br><strong>IFSC:</strong> ${companyConfig.bank.ifsc}</div>
