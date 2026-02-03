@@ -145,9 +145,10 @@ const ActionButton = ({ icon: Icon, label, onClick, variant = 'default', disable
     warning: { bg: '#D97706', hoverBg: '#B45309', text: '#FFFFFF', border: '#D97706' },
     danger: { bg: '#DC2626', hoverBg: '#B91C1C', text: '#FFFFFF', border: '#DC2626' },
     brand: { bg: '#2874A6', hoverBg: '#1a5276', text: '#FFFFFF', border: '#2874A6' },
-    purple: { bg: '#7C3AED', hoverBg: '#6D28D9', text: '#FFFFFF', border: '#7C3AED' }
+    purple: { bg: '#7C3AED', hoverBg: '#6D28D9', text: '#FFFFFF', border: '#7C3AED' },
+    secondary: { bg: '#F1F5F9', hoverBg: '#E2E8F0', text: '#475569', border: '#CBD5E1' }
   };
-  const v = variants[variant];
+  const v = variants[variant] || variants.default;
   
   return (
     <button
