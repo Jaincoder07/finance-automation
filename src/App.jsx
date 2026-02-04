@@ -3332,14 +3332,20 @@ ${generateInvoiceHtml(row)}
       return true;
     });
     
+    // Group by Party + Client Code (separate groups for same party with different codes)
     const groupedTabData = filteredTabData.reduce((acc, row) => {
-      const party = row.partyName || 'Unknown';
-      if (!acc[party]) acc[party] = [];
-      acc[party].push(row);
+      const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails) || '';
+      const groupKey = `${row.partyName || 'Unknown'}|||${rowClientCode}`;
+      if (!acc[groupKey]) acc[groupKey] = { partyName: row.partyName || 'Unknown', clientCode: rowClientCode, rows: [] };
+      acc[groupKey].rows.push(row);
       return acc;
     }, {});
     
-    const partyNames = Object.keys(groupedTabData).sort();
+    const partyGroups = Object.values(groupedTabData).sort((a, b) => {
+      const nameCompare = a.partyName.localeCompare(b.partyName);
+      if (nameCompare !== 0) return nameCompare;
+      return (a.clientCode || '').localeCompare(b.clientCode || '');
+    });
 
     return (
       <div>
@@ -3385,7 +3391,7 @@ ${generateInvoiceHtml(row)}
 
         {masterData.length > 0 && renderFilters()}
 
-        {partyNames.length === 0 ? (
+        {partyGroups.length === 0 ? (
           <Card>
             <div style={{ padding: '60px', textAlign: 'center', color: '#94A3B8' }}>
               <Upload size={48} style={{ marginBottom: '16px', opacity: 0.5 }} />
@@ -3395,20 +3401,24 @@ ${generateInvoiceHtml(row)}
           </Card>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {partyNames.map(party => {
-              const rows = groupedTabData[party];
-              const isExpanded = expandedParties.has(party);
+            {partyGroups.map((group, groupIdx) => {
+              const { partyName: party, clientCode: groupClientCode, rows } = group;
+              const groupKey = `${party}|||${groupClientCode}`;
+              const isExpanded = expandedParties.has(groupKey);
               const billedCount = rows.filter(r => r.toBeBilled === 'Yes').length;
               const invoicedCount = rows.filter(r => r.invoiceGenerated).length;
               const partyTotal = rows.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || 0), 0);
 
               return (
-                <div key={party} style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', border: '1px solid #E2E8F0', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
-                  <div onClick={() => togglePartyExpansion(party)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: masterSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
+                <div key={groupKey} style={{ backgroundColor: '#FFFFFF', borderRadius: '12px', border: '1px solid #E2E8F0', overflow: 'hidden', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                  <div onClick={() => togglePartyExpansion(groupKey)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: masterSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       {isExpanded ? <ChevronDown size={22} color="#2874A6" /> : <ChevronRight size={22} color="#64748B" />}
                       <div>
-                        <div style={{ fontWeight: '700', fontSize: '16px', color: '#1E293B' }}>{party}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontWeight: '700', fontSize: '16px', color: '#1E293B' }}>{party}</span>
+                          {groupClientCode && <span style={{ padding: '2px 8px', backgroundColor: '#F3E8FF', color: '#6B21A8', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>{groupClientCode}</span>}
+                        </div>
                         <div style={{ fontSize: '13px', color: '#64748B', marginTop: '3px' }}>{rows.length} campaigns • {billedCount} billed • {invoicedCount} invoiced</div>
                       </div>
                     </div>
@@ -3906,6 +3916,11 @@ ${generateInvoiceHtml(row)}
   
   // Generate service invoice PDF
   const generateServiceInvoicePDF = (row) => {
+    if (!row || !row.invoiceNo) {
+      alert('Invoice data not found');
+      return;
+    }
+    
     const partyGstin = getPartyGstinFromMaster(row.partyName, row.statePartyDetails);
     const partyAddress = getPartyAddressFromMaster(row.partyName, row.statePartyDetails);
     const partyState = row.statePartyDetails;
@@ -3916,6 +3931,7 @@ ${generateInvoiceHtml(row)}
     const igst = parseFloat(row.igst) || 0;
     const grandTotal = parseFloat(row.invoiceTotalAmount) || (baseAmount + cgst + sgst + igst);
     const isSameState = cgst > 0;
+    const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails) || '';
     
     const html = `
 <!DOCTYPE html>
@@ -3945,7 +3961,7 @@ ${generateInvoiceHtml(row)}
     </div>
     <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
       <div style="font-size: 11px; color: #666; margin-bottom: 3px;">Buyer (Bill to)</div>
-      <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px; color: #1a5276;">${row.partyName}</div>
+      <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px; color: #1a5276;">${row.partyName}${rowClientCode ? ' <span style="background:#9333EA;color:white;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:8px;">' + rowClientCode + '</span>' : ''}</div>
       <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${partyState || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${partyState || companyConfig.stateName}</div>
     </div>
     <table style="width: 100%; border-collapse: collapse;">
@@ -3983,10 +3999,19 @@ ${generateInvoiceHtml(row)}
 </body>
 </html>`;
     
-    const printWindow = window.open('', '_blank');
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.print();
+    try {
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(html);
+        printWindow.document.close();
+        printWindow.focus();
+      } else {
+        alert('Pop-up blocked. Please allow pop-ups for this site to view invoices.');
+      }
+    } catch (err) {
+      console.error('Error opening invoice:', err);
+      alert('Error opening invoice: ' + err.message);
+    }
   };
   
   // Services parties list
@@ -4042,18 +4067,24 @@ ${generateInvoiceHtml(row)}
     
     console.log('Services Tab Data:', { openCount: openServices.length, closedCount: closedServices.length, currentTab: servicesSheetTab });
     
-    const groupedByParty = {};
+    // Group by Party + Client Code (separate groups for same party with different codes)
+    const groupedByPartyCode = {};
     filteredTabData.forEach(row => {
-      const party = row.partyName || 'Unknown';
-      if (!groupedByParty[party]) groupedByParty[party] = [];
-      groupedByParty[party].push(row);
+      const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails) || '';
+      const groupKey = `${row.partyName || 'Unknown'}|||${rowClientCode}`;
+      if (!groupedByPartyCode[groupKey]) groupedByPartyCode[groupKey] = { partyName: row.partyName || 'Unknown', clientCode: rowClientCode, rows: [] };
+      groupedByPartyCode[groupKey].rows.push(row);
     });
-    const sortedParties = Object.keys(groupedByParty).sort();
+    const servicePartyGroups = Object.values(groupedByPartyCode).sort((a, b) => {
+      const nameCompare = a.partyName.localeCompare(b.partyName);
+      if (nameCompare !== 0) return nameCompare;
+      return (a.clientCode || '').localeCompare(b.clientCode || '');
+    });
     
     // Auto-expand all parties for Director view
-    if (isDirector && sortedParties.length > 0 && expandedServiceParties.size === 0) {
-      const allParties = new Set(sortedParties);
-      setExpandedServiceParties(allParties);
+    if (isDirector && servicePartyGroups.length > 0 && expandedServiceParties.size === 0) {
+      const allGroupKeys = new Set(servicePartyGroups.map(g => `${g.partyName}|||${g.clientCode}`));
+      setExpandedServiceParties(allGroupKeys);
     }
     
     return (
@@ -4133,37 +4164,39 @@ ${generateInvoiceHtml(row)}
           </div>
           <button 
             onClick={() => {
-              if (expandedServiceParties.size === sortedParties.length) {
+              if (expandedServiceParties.size === servicePartyGroups.length) {
                 setExpandedServiceParties(new Set());
               } else {
-                setExpandedServiceParties(new Set(sortedParties));
+                setExpandedServiceParties(new Set(servicePartyGroups.map(g => `${g.partyName}|||${g.clientCode}`)));
               }
             }} 
             style={{ padding: '8px 16px', fontSize: '12px', fontWeight: '600', border: '1px solid #CBD5E1', borderRadius: '6px', cursor: 'pointer', backgroundColor: '#F8FAFC', color: '#475569' }}
           >
-            {expandedServiceParties.size === sortedParties.length ? 'Collapse All' : 'Expand All'}
+            {expandedServiceParties.size === servicePartyGroups.length ? 'Collapse All' : 'Expand All'}
           </button>
         </div>
         
         <Card title={`Services - ${servicesSheetTab === 'open' ? 'Open' : 'Closed'}`} noPadding>
-          {sortedParties.length === 0 ? (
+          {servicePartyGroups.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#94A3B8' }}>
               <Layers size={40} style={{ marginBottom: '10px', opacity: 0.5 }} />
               <p>No services in this tab</p>
               {canEdit && <p style={{ marginTop: '10px', fontSize: '13px' }}>Upload Excel or Add Entry to get started</p>}
             </div>
           ) : (
-            sortedParties.map(party => {
-              const partyRows = groupedByParty[party];
-              const isExpanded = expandedServiceParties.has(party);
+            servicePartyGroups.map((group, groupIdx) => {
+              const { partyName: party, clientCode: groupClientCode, rows: partyRows } = group;
+              const groupKey = `${party}|||${groupClientCode}`;
+              const isExpanded = expandedServiceParties.has(groupKey);
               const partyTotal = partyRows.filter(r => r.toBeBilled === 'Yes').reduce((sum, r) => sum + (parseFloat(r.totalWithGst) || parseFloat(r.invoiceAmount) || 0), 0);
               
               return (
-                <div key={party} style={{ borderBottom: '2px solid #E2E8F0' }}>
-                  <div onClick={() => toggleServicePartyExpansion(party)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: servicesSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
+                <div key={groupKey} style={{ borderBottom: '2px solid #E2E8F0' }}>
+                  <div onClick={() => toggleServicePartyExpansion(groupKey)} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', backgroundColor: servicesSheetTab === 'closed' ? '#F0FDF4' : '#F8FAFC', cursor: 'pointer', borderBottom: isExpanded ? '3px solid #2874A6' : 'none' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                       {isExpanded ? <ChevronDown size={20} color="#2874A6" /> : <ChevronRight size={20} color="#64748B" />}
                       <span style={{ fontWeight: '700', fontSize: '15px', color: '#1E293B' }}>{party}</span>
+                      {groupClientCode && <span style={{ padding: '2px 8px', backgroundColor: '#F3E8FF', color: '#6B21A8', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>{groupClientCode}</span>}
                       <span style={{ padding: '4px 10px', backgroundColor: '#E0E7FF', color: '#3730A3', borderRadius: '9999px', fontSize: '12px', fontWeight: '600' }}>{partyRows.length} items</span>
                     </div>
                     <div style={{ fontWeight: '700', color: '#059669' }}>{formatCurrency(partyTotal)}</div>
@@ -4191,10 +4224,7 @@ ${generateInvoiceHtml(row)}
                             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569' }}>Actions</th>
                             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569', backgroundColor: '#F0FDF4' }}>Mailed</th>
                             <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569', backgroundColor: '#F0FDF4' }}>Mail Date</th>
-                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569', backgroundColor: '#FEF3C7' }}>Receipt</th>
-                            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '600', color: '#475569', backgroundColor: '#FEF3C7' }}>Received</th>
-                            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '600', color: '#475569', backgroundColor: '#FEF3C7' }}>TDS</th>
-                            <th style={{ padding: '10px 8px', textAlign: 'right', fontWeight: '600', color: '#475569', backgroundColor: '#FEF3C7' }}>Balance</th>
+                            <th style={{ padding: '10px 8px', textAlign: 'center', fontWeight: '600', color: '#475569', backgroundColor: '#FEF3C7' }}>Status</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -4203,12 +4233,32 @@ ${generateInvoiceHtml(row)}
                             const allEmails = [row.emailId, ...(row.additionalEmails || [])].filter(Boolean);
                             const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
                             
-                            // Get receipt details for this service invoice
+                            // Get receipt details for this service invoice (for status display only)
                             const serviceReceipts = safeReceipts.filter(r => r.invoiceNo === row.invoiceNo);
+                            const serviceCNs = safeCreditNotes.filter(cn => cn.invoiceNo === row.invoiceNo);
                             const totalReceived = serviceReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
                             const totalTDS = serviceReceipts.reduce((sum, r) => sum + (parseFloat(r.tds) || parseFloat(r.tdsAmount) || 0), 0);
+                            const cnAmount = serviceCNs.reduce((sum, cn) => sum + Math.abs(parseFloat(cn.totalAmount) || 0), 0);
                             const invoiceTotal = parseFloat(row.invoiceTotalAmount) || 0;
-                            const balance = invoiceTotal - totalReceived - totalTDS;
+                            const balance = invoiceTotal - totalReceived - totalTDS - cnAmount;
+                            
+                            // Determine status
+                            let receiptStatusDisplay = 'Pending';
+                            let statusBg = '#FEF3C7';
+                            let statusColor = '#92400E';
+                            if (cnAmount >= invoiceTotal) {
+                              receiptStatusDisplay = 'Cancelled';
+                              statusBg = '#FEE2E2';
+                              statusColor = '#B91C1C';
+                            } else if (balance <= 0) {
+                              receiptStatusDisplay = 'Paid';
+                              statusBg = '#D1FAE5';
+                              statusColor = '#065F46';
+                            } else if (totalReceived > 0 || totalTDS > 0 || cnAmount > 0) {
+                              receiptStatusDisplay = 'Partial';
+                              statusBg = '#FEF3C7';
+                              statusColor = '#92400E';
+                            }
                             
                             return (
                             <tr key={row.id} style={{ backgroundColor: row.toBeBilled === 'Yes' ? (row.invoiceGenerated ? '#F0FDF4' : '#FFFBEB') : '#FFFFFF', borderBottom: '1px solid #F1F5F9' }}>
@@ -4353,36 +4403,13 @@ ${generateInvoiceHtml(row)}
                                 ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                               </td>
                               
-                              {/* Receipt Column */}
+                              {/* Status Column - shows receipt status as badge */}
                               <td style={{ padding: '10px 8px', textAlign: 'center', backgroundColor: '#FEF3C7' }}>
                                 {row.invoiceGenerated && row.invoiceStatus === 'Approved' ? (
-                                  serviceReceipts.length > 0 ? (
-                                    <span style={{ fontSize: '11px', color: '#166534', fontWeight: '600' }}>
-                                      {serviceReceipts.map(r => r.receiptNo).join(', ')}
-                                    </span>
-                                  ) : canEdit ? (
-                                    <ActionButton icon={CreditCard} small variant="warning" onClick={() => {
-                                      setSelectedRow(row);
-                                      setReceiptData({ date: new Date().toISOString().split('T')[0], amount: '', tds: '', paymentMode: 'Bank Transfer', narration: '' });
-                                      setShowReceiptModal(true);
-                                    }} title="Post Receipt" />
-                                  ) : <span style={{ color: '#CBD5E1' }}>-</span>
+                                  <span style={{ padding: '4px 10px', backgroundColor: statusBg, color: statusColor, borderRadius: '9999px', fontSize: '11px', fontWeight: '600' }}>
+                                    {receiptStatusDisplay}
+                                  </span>
                                 ) : <span style={{ color: '#CBD5E1' }}>-</span>}
-                              </td>
-                              
-                              {/* Amount Received */}
-                              <td style={{ padding: '10px 8px', textAlign: 'right', backgroundColor: '#FEF3C7', fontWeight: '600', color: totalReceived > 0 ? '#166534' : '#CBD5E1' }}>
-                                {totalReceived > 0 ? formatCurrencyShort(totalReceived) : '-'}
-                              </td>
-                              
-                              {/* TDS */}
-                              <td style={{ padding: '10px 8px', textAlign: 'right', backgroundColor: '#FEF3C7', fontWeight: '600', color: totalTDS > 0 ? '#1E40AF' : '#CBD5E1' }}>
-                                {totalTDS > 0 ? formatCurrencyShort(totalTDS) : '-'}
-                              </td>
-                              
-                              {/* Balance */}
-                              <td style={{ padding: '10px 8px', textAlign: 'right', backgroundColor: '#FEF3C7', fontWeight: '700', color: balance > 0 ? '#DC2626' : '#166534' }}>
-                                {row.invoiceGenerated ? (balance > 0 ? formatCurrencyShort(balance) : '✓ Paid') : '-'}
                               </td>
                             </tr>
                           )})}
@@ -5192,17 +5219,23 @@ ${generateInvoiceHtml(row)}
       );
     }
 
-    // Group invoices by party for client-wise display
-    const invoicesByParty = {};
+    // Group invoices by party + client code for separate display
+    const invoiceGroups = {};
     invoices.forEach(inv => {
-      if (!invoicesByParty[inv.partyName]) {
-        invoicesByParty[inv.partyName] = [];
+      const invClientCode = inv.clientCode || '';
+      const groupKey = `${inv.partyName}|||${invClientCode}`;
+      if (!invoiceGroups[groupKey]) {
+        invoiceGroups[groupKey] = { partyName: inv.partyName, clientCode: invClientCode, invoices: [] };
       }
-      invoicesByParty[inv.partyName].push(inv);
+      invoiceGroups[groupKey].invoices.push(inv);
     });
     
-    // Sort parties alphabetically
-    const sortedParties = Object.keys(invoicesByParty).sort();
+    // Sort groups by party name, then client code
+    const sortedInvoiceGroups = Object.values(invoiceGroups).sort((a, b) => {
+      const nameCompare = a.partyName.localeCompare(b.partyName);
+      if (nameCompare !== 0) return nameCompare;
+      return (a.clientCode || '').localeCompare(b.clientCode || '');
+    });
 
     const hasInvoiceFilters = invoiceFilters.party || invoiceFilters.invoiceStatus || invoiceFilters.receiptStatus || invoiceFilters.invoiceType || invoiceFilters.searchText;
     const allInvoices = Array.from(invoiceMap.values());
@@ -5296,12 +5329,13 @@ ${generateInvoiceHtml(row)}
               </tr>
             </thead>
             <tbody>
-              {sortedParties.length === 0 ? (
+              {sortedInvoiceGroups.length === 0 ? (
                 <tr><td colSpan="13" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>{hasInvoiceFilters ? 'No matching invoices' : 'No invoices generated yet'}</td></tr>
               ) : (
-                sortedParties.map(party => {
-                  const partyInvoices = invoicesByParty[party];
-                  const isExpanded = expandedParties.has(party);
+                sortedInvoiceGroups.map((group, groupIdx) => {
+                  const { partyName: party, clientCode: groupClientCode, invoices: partyInvoices } = group;
+                  const groupKey = `${party}|||${groupClientCode}`;
+                  const isExpanded = expandedParties.has(groupKey);
                   
                   // Calculate total balance for the party
                   let partyTotalBalance = 0;
@@ -5320,22 +5354,19 @@ ${generateInvoiceHtml(row)}
                     partyTotalBalance += balanceAmount;
                   });
                   
-                  // Get first invoice's client code for party header
-                  const partyClientCode = partyInvoices[0]?.clientCode || '';
-                  
                   return (
-                    <React.Fragment key={party}>
+                    <React.Fragment key={groupKey}>
                       {/* Party Header Row */}
                       <tr 
-                        onClick={() => togglePartyExpansion(party)}
+                        onClick={() => togglePartyExpansion(groupKey)}
                         style={{ backgroundColor: '#1E3A5F', color: 'white', cursor: 'pointer', borderBottom: '1px solid #0F2744' }}
                       >
                         <td colSpan="4" style={{ padding: '10px 12px', fontWeight: '700', fontSize: '13px' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                             {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                             <Users size={16} />
-                            {partyClientCode && <span style={{ backgroundColor: '#9333EA', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' }}>{partyClientCode}</span>}
                             {party}
+                            {groupClientCode && <span style={{ backgroundColor: '#9333EA', padding: '2px 8px', borderRadius: '6px', fontSize: '11px' }}>{groupClientCode}</span>}
                             <span style={{ backgroundColor: '#2874A6', padding: '2px 10px', borderRadius: '12px', fontSize: '11px', fontWeight: '600' }}>
                               {partyInvoices.length} inv
                             </span>
@@ -7430,21 +7461,29 @@ ${generateInvoiceHtml(row)}
       );
     }
     
+    // Group by party + client code
     const grouped = {};
     filteredInvoices.forEach(inv => {
-      if (!grouped[inv.partyName]) {
-        grouped[inv.partyName] = {
+      const invClientCode = inv.clientCode || '';
+      const groupKey = `${inv.partyName}|||${invClientCode}`;
+      if (!grouped[groupKey]) {
+        grouped[groupKey] = {
           partyName: inv.partyName,
+          clientCode: invClientCode,
           invoices: [],
           totalAmount: 0
         };
       }
-      grouped[inv.partyName].invoices.push(inv);
+      grouped[groupKey].invoices.push(inv);
       // Use pending amount (after partial CN) instead of total amount
-      grouped[inv.partyName].totalAmount += parseFloat(inv.pendingAmount || inv.invoiceTotalAmount) || 0;
+      grouped[groupKey].totalAmount += parseFloat(inv.pendingAmount || inv.invoiceTotalAmount) || 0;
     });
-    // Sort parties alphabetically
-    return Object.values(grouped).sort((a, b) => a.partyName.localeCompare(b.partyName));
+    // Sort parties alphabetically, then by client code
+    return Object.values(grouped).sort((a, b) => {
+      const nameCompare = a.partyName.localeCompare(b.partyName);
+      if (nameCompare !== 0) return nameCompare;
+      return (a.clientCode || '').localeCompare(b.clientCode || '');
+    });
   }, [pendingInvoicesForFollowup, followupSearchText]);
   
   const renderFollowups = () => {
@@ -7520,7 +7559,7 @@ ${generateInvoiceHtml(row)}
           </Card>
         ) : (
           pendingInvoicesGroupedByParty.map(partyGroup => (
-            <Card key={partyGroup.partyName} style={{ marginBottom: '16px' }} noPadding>
+            <Card key={`${partyGroup.partyName}|||${partyGroup.clientCode}`} style={{ marginBottom: '16px' }} noPadding>
               {/* Party Header */}
               <div style={{ 
                 padding: '12px 16px', 
@@ -7532,6 +7571,7 @@ ${generateInvoiceHtml(row)}
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <span style={{ fontSize: '15px', fontWeight: '700' }}>🏢 {partyGroup.partyName}</span>
+                  {partyGroup.clientCode && <span style={{ padding: '2px 8px', backgroundColor: '#9333EA', borderRadius: '6px', fontSize: '11px', fontWeight: '700' }}>{partyGroup.clientCode}</span>}
                   <span style={{ 
                     padding: '3px 10px', 
                     backgroundColor: '#3B82F6', 
