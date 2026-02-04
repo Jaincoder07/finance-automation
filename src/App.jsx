@@ -3724,6 +3724,9 @@ ${generateInvoiceHtml(row)}
     const isDirector = userRole === 'director';
     const canEdit = userRole === 'finance';
     
+    // Debug: Log services data count
+    console.log('Services Data:', safeServicesData.length, 'entries, Role:', userRole);
+    
     const openServices = filteredServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved');
     const closedServices = filteredServicesData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved');
     const filteredTabData = servicesSheetTab === 'open' ? openServices : closedServices;
@@ -4028,6 +4031,29 @@ ${generateInvoiceHtml(row)}
   const exportInvoiceRegisterToExcel = (invoices) => {
     const exportData = [];
     
+    // Helper to extract year+suffix for CN matching
+    const getInvoiceYearSuffix = (vchNo) => {
+      if (!vchNo) return '';
+      const parts = vchNo.split('/');
+      if (parts.length >= 3) return parts.slice(1).join('/');
+      else if (parts.length === 2) return parts.join('/');
+      return parts[parts.length - 1];
+    };
+    
+    // Build CN map for matching (same as render function)
+    const historicalCNs = safeLedgerEntries.filter(e => 
+      e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
+    );
+    const cnMap = new Map();
+    safeCreditNotes.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.invoiceNo);
+      if (key) cnMap.set(key, { ...cn, isSystemCN: true });
+    });
+    historicalCNs.forEach(cn => {
+      const key = getInvoiceYearSuffix(cn.vchNo);
+      if (key && !cnMap.has(key)) cnMap.set(key, { ...cn, isHistoricalCN: true });
+    });
+    
     // Group by party like in UI
     const groupedByParty = {};
     invoices.forEach(inv => {
@@ -4040,22 +4066,23 @@ ${generateInvoiceHtml(row)}
       const partyInvoices = groupedByParty[party];
       
       partyInvoices.forEach(inv => {
-        const cnMatch = inv.cnMatch;
-        const cnAmount = cnMatch ? Math.abs(parseFloat(cnMatch.isSystemCN ? cnMatch.totalAmount : cnMatch.credit) || 0) : 0;
-        const receiptInfo = receipts.filter(r => r.invoiceNo === inv.invoiceNo);
+        // Find CN match using year+suffix
+        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+        const cnMatch = cnMap.get(invYearSuffix);
+        const cnAmount = cnMatch ? Math.abs(parseFloat(cnMatch.totalAmount || cnMatch.credit || cnMatch.debit) || 0) : 0;
+        
+        const receiptInfo = safeReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
         const totalReceived = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
         const totalTds = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
         const balance = inv.totalAmount - totalReceived - totalTds - cnAmount;
         
         // Determine receipt status exactly as shown in UI
         let receiptStatus = 'Pending';
-        if (balance <= 0) {
-          if (cnAmount >= inv.totalAmount) {
-            receiptStatus = 'Cancelled';
-          } else {
-            receiptStatus = 'Paid';
-          }
-        } else if (totalReceived > 0 || totalTds > 0) {
+        if (cnAmount >= inv.totalAmount) {
+          receiptStatus = 'Cancelled';
+        } else if (balance <= 0) {
+          receiptStatus = 'Paid';
+        } else if (totalReceived > 0 || totalTds > 0 || cnAmount > 0) {
           receiptStatus = 'Partial';
         }
         
@@ -4068,7 +4095,7 @@ ${generateInvoiceHtml(row)}
           'Received': totalReceived || '',
           'TDS': totalTds || '',
           'CN Amount': cnAmount || '',
-          'Balance': balance,
+          'Balance': balance > 0 ? balance : 0,
           'Invoice Status': inv.invoiceStatus,
           'Receipt Status': receiptStatus,
           'Receipt No': receiptInfo.map(r => r.receiptNo).join(', '),
@@ -4149,7 +4176,7 @@ ${generateInvoiceHtml(row)}
     XLSX.writeFile(wb, `${partyName.substring(0, 20)}_Ledger_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export All Party Ledgers - EXACT match to UI/print with Date, sub-rows for GST/campaigns
+  // Export All Party Ledgers - EXACT match to print format
   const exportAllLedgersToExcel = () => {
     const wb = XLSX.utils.book_new();
     let sheetsAdded = 0;
@@ -4190,8 +4217,8 @@ ${generateInvoiceHtml(row)}
       });
       
       const invoiceNos = new Set(Array.from(invoiceMap.keys()));
-      const partyReceipts = receipts.filter(r => matchParty(r.partyName, party) && (!partyState || invoiceNos.has(r.invoiceNo)));
-      const partyCNs = creditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyState || invoiceNos.has(cn.invoiceNo)));
+      const partyReceipts = safeReceipts.filter(r => matchParty(r.partyName, party) && (!partyState || invoiceNos.has(r.invoiceNo)));
+      const partyCNs = safeCreditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyState || invoiceNos.has(cn.invoiceNo)));
       
       // Historical entries
       const historicalInvoices = !partyState ? safeLedgerEntries.filter(e => 
@@ -4205,210 +4232,176 @@ ${generateInvoiceHtml(row)}
       const cnByYearSuffix = new Map();
       partyCNs.forEach(cn => {
         const key = getInvoiceYearSuffix(cn.invoiceNo);
-        if (key) cnByYearSuffix.set(key, cn);
+        if (key) cnByYearSuffix.set(key, { ...cn, isSystemCN: true });
       });
       historicalCNs.forEach(cn => {
         const key = getInvoiceYearSuffix(cn.vchNo);
         if (key && !cnByYearSuffix.has(key)) cnByYearSuffix.set(key, cn);
       });
       
-      const exportData = [];
+      // Build rows using arrays - EXACT column order as print
+      // Columns: Date, Particular, Vch Type, Vch No., Debit, Credit, Amt Received, TDS, Balance
+      const rows = [];
       let runningBalance = opening;
       let totalDebit = 0, totalCredit = 0, totalReceived = 0, totalTds = 0;
       const processedCNKeys = new Set();
       
-      // Header
-      exportData.push({ Date: party });
-      exportData.push({ Date: 'Ledger Account' });
-      if (partyInfo.address) exportData.push({ Date: partyInfo.address });
-      if (partyState) exportData.push({ Date: partyInfo.state });
-      if (partyInfo.gstin) exportData.push({ Date: `GSTIN: ${partyInfo.gstin}` });
-      exportData.push({});
+      // Header rows
+      rows.push([party]);
+      rows.push(['Ledger Account']);
+      if (partyInfo.address) rows.push([partyInfo.address]);
+      if (partyInfo.state) rows.push([partyInfo.state]);
+      if (partyInfo.gstin) rows.push(['GSTIN: ' + partyInfo.gstin]);
+      rows.push([]);
       
-      // Column headers - exact match to UI
-      exportData.push({ 
-        Date: 'Date', Particular: 'Particular', VchType: 'Vch Type', VchNo: 'Vch No.', 
-        Debit: 'Debit', Credit: 'Credit', DateOfReceipt: 'Date of Receipt',
-        AmtReceived: 'Amount Received', TDS: 'TDS Received', Balance: 'Balance', PaymentStatus: 'Payment Status'
-      });
+      // Column headers - EXACT as your screenshot
+      rows.push(['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Amt Received', 'TDS', 'Balance']);
       
       // Opening balance
       if (opening !== 0) {
-        exportData.push({ 
-          Date: '', Particular: 'Opening Balance', VchType: '', VchNo: '', 
-          Debit: opening > 0 ? opening : '', Credit: opening < 0 ? Math.abs(opening) : '',
-          DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: opening, PaymentStatus: ''
-        });
+        rows.push(['', 'Opening Balance', '', '', opening > 0 ? opening : '', opening < 0 ? Math.abs(opening) : '', '', '', opening]);
         if (opening > 0) totalDebit += opening; else totalCredit += Math.abs(opening);
       }
       
-      // Invoice entries
-      Array.from(invoiceMap.values()).sort((a, b) => new Date(a.invoiceDate) - new Date(b.invoiceDate)).forEach(inv => {
-        // Calculate base amount and GST
-        const baseAmount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
-        const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
-        const cgst = isSameState ? baseAmount * 0.09 : 0;
-        const sgst = isSameState ? baseAmount * 0.09 : 0;
-        const igst = isSameState ? 0 : baseAmount * 0.18;
-        const totalAmount = baseAmount + cgst + sgst + igst;
-        
-        // Get receipt for this invoice
-        const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
-        const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-        const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
-        const receiptDate = invReceipts.length > 0 ? formatDate(invReceipts[0].date) : '';
-        
-        // Check for CN
-        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
-        const matchingCN = cnByYearSuffix.get(invYearSuffix);
-        const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount || matchingCN.credit) || 0) : 0;
-        const isFullyCoveredByCN = matchingCN && cnAmount >= totalAmount;
-        
-        // Determine payment status
-        let paymentStatus = '';
-        let balanceAmount = totalAmount;
-        if (received > 0 || tds > 0) {
-          paymentStatus = 'Received';
-          balanceAmount = totalAmount - received - tds;
-        }
-        if (isFullyCoveredByCN) {
-          paymentStatus = 'CN Closed';
-          balanceAmount = 0;
-        }
-        
-        runningBalance += totalAmount;
-        totalDebit += totalAmount;
-        
-        // Main invoice row with Date
-        exportData.push({ 
-          Date: formatDate(inv.invoiceDate),
-          Particular: party, VchType: 'Sales', VchNo: inv.invoiceNo, 
-          Debit: totalAmount, Credit: '',
-          DateOfReceipt: receiptDate, AmtReceived: received || '', TDS: tds || '',
-          Balance: isFullyCoveredByCN ? '-' : (balanceAmount > 0 ? balanceAmount : '-'), 
-          PaymentStatus: paymentStatus
-        });
-        
-        // Sub-row: Campaign/Service names with credit (base amount breakdown)
-        exportData.push({ 
-          Date: '',
-          Particular: '    PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), 
-          VchType: '', VchNo: '', Debit: '', Credit: baseAmount,
-          DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: ''
-        });
-        
-        // Sub-row: GST breakdown
-        if (isSameState) {
-          exportData.push({ Date: '', Particular: '    CGST', VchType: '', VchNo: '', Debit: '', Credit: cgst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-          exportData.push({ Date: '', Particular: '    SGST', VchType: '', VchNo: '', Debit: '', Credit: sgst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-        } else {
-          exportData.push({ Date: '', Particular: '    IGST', VchType: '', VchNo: '', Debit: '', Credit: igst, DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-        }
-        
-        // Deduct receipt from balance
-        if (received > 0 || tds > 0) {
-          runningBalance -= (received + tds);
-          totalReceived += received;
-          totalTds += tds;
-          totalCredit += (received + tds);
-        }
-        
-        // Add CN entry right after invoice if exists
-        if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
-          processedCNKeys.add(invYearSuffix);
-          runningBalance -= cnAmount;
-          totalCredit += cnAmount;
+      // Combine all invoices and historical, sort by date
+      const allEntries = [];
+      Array.from(invoiceMap.values()).forEach(inv => {
+        allEntries.push({ ...inv, entryType: 'invoice', sortDate: inv.invoiceDate });
+      });
+      historicalInvoices.forEach(e => {
+        allEntries.push({ ...e, entryType: 'historical', sortDate: e.date });
+      });
+      allEntries.sort((a, b) => new Date(a.sortDate) - new Date(b.sortDate));
+      
+      // Process each entry
+      allEntries.forEach(entry => {
+        if (entry.entryType === 'invoice') {
+          const inv = entry;
+          // Calculate amounts
+          const baseAmount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
+          const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const cgst = isSameState ? baseAmount * 0.09 : 0;
+          const sgst = isSameState ? baseAmount * 0.09 : 0;
+          const igst = isSameState ? 0 : baseAmount * 0.18;
+          const totalAmount = baseAmount + cgst + sgst + igst;
           
-          // CN main row with Date
-          exportData.push({ 
-            Date: matchingCN.date ? formatDate(matchingCN.date) : '',
-            Particular: party, VchType: 'Credit Note', VchNo: matchingCN.creditNoteNo || matchingCN.vchNo, 
-            Debit: '', Credit: cnAmount,
-            DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '-', PaymentStatus: ''
-          });
+          // Get receipt for this invoice
+          const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
+          const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+          const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
           
-          // CN sub-rows with negative debit amounts (like in UI)
-          const cnBase = cnAmount / 1.18;
-          const cnTax = cnAmount - cnBase;
-          exportData.push({ Date: '', Particular: '    PROMOTIONAL TRADE EMAILER', VchType: '', VchNo: '', Debit: `₹-${cnBase.toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-          if (isSameState) {
-            exportData.push({ Date: '', Particular: '    CGST', VchType: '', VchNo: '', Debit: `₹-${(cnTax/2).toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-            exportData.push({ Date: '', Particular: '    SGST', VchType: '', VchNo: '', Debit: `₹-${(cnTax/2).toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
-          } else {
-            exportData.push({ Date: '', Particular: '    IGST', VchType: '', VchNo: '', Debit: `₹-${cnTax.toFixed(2)}`, Credit: '', DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: '' });
+          // Check for CN
+          const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+          const matchingCN = cnByYearSuffix.get(invYearSuffix);
+          const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount || matchingCN.credit) || 0) : 0;
+          const hasCN = !!matchingCN;
+          
+          runningBalance += totalAmount;
+          totalDebit += totalAmount;
+          
+          // Main invoice row
+          rows.push([
+            formatDate(inv.invoiceDate),
+            party,
+            'Sales',
+            inv.invoiceNo,
+            totalAmount,
+            '',
+            received || '',
+            tds || '',
+            runningBalance
+          ]);
+          
+          // Deduct receipt from balance
+          if (received > 0 || tds > 0) {
+            runningBalance -= (received + tds);
+            totalReceived += received;
+            totalTds += tds;
+          }
+          
+          // Add CN entry right after invoice if exists
+          if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+            processedCNKeys.add(invYearSuffix);
+            runningBalance -= cnAmount;
+            totalCredit += cnAmount;
+            
+            // CN row
+            rows.push([
+              formatDate(matchingCN.date),
+              'Credit Note',
+              'Credit Note',
+              matchingCN.creditNoteNo || matchingCN.vchNo,
+              '',
+              cnAmount,
+              '',
+              '',
+              runningBalance
+            ]);
+          }
+        } else if (entry.entryType === 'historical') {
+          const e = entry;
+          const debit = parseFloat(e.debit) || 0;
+          const invYearSuffix = getInvoiceYearSuffix(e.vchNo);
+          const matchingCN = cnByYearSuffix.get(invYearSuffix);
+          
+          runningBalance += debit;
+          totalDebit += debit;
+          
+          rows.push([
+            formatDate(e.date),
+            e.particular || party,
+            e.vchType || 'Sales',
+            e.vchNo || '',
+            debit,
+            '',
+            '',
+            '',
+            runningBalance
+          ]);
+          
+          // Add CN right after if exists
+          if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+            processedCNKeys.add(invYearSuffix);
+            const cnAmount = Math.abs(parseFloat(matchingCN.totalAmount || matchingCN.credit || matchingCN.debit) || 0);
+            runningBalance -= cnAmount;
+            totalCredit += cnAmount;
+            
+            rows.push([
+              formatDate(matchingCN.date),
+              'Credit Note',
+              'Credit Note',
+              matchingCN.creditNoteNo || matchingCN.vchNo,
+              '',
+              cnAmount,
+              '',
+              '',
+              runningBalance
+            ]);
           }
         }
       });
       
-      // Historical entries
-      historicalInvoices.forEach(e => {
-        const debit = parseFloat(e.debit) || 0;
-        const credit = parseFloat(e.credit) || 0;
-        runningBalance += debit - credit;
-        totalDebit += debit;
-        totalCredit += credit;
-        
-        // Check for historical receipt info
-        const histReceiptDate = e.receiptDate ? formatDate(e.receiptDate) : '';
-        const histReceived = parseFloat(e.amountReceived) || 0;
-        const histTds = parseFloat(e.tdsReceived) || 0;
-        
-        exportData.push({ 
-          Date: e.date ? formatDate(e.date) : '',
-          Particular: e.particular || party, VchType: e.vchType || 'Sales', VchNo: e.vchNo || '', 
-          Debit: debit || '', Credit: credit || '',
-          DateOfReceipt: histReceiptDate, AmtReceived: histReceived || '', TDS: histTds || '',
-          Balance: runningBalance, PaymentStatus: e.paymentStatus || ''
-        });
-        
-        // Add sub-rows if they exist
-        if (e.subRows && Array.isArray(e.subRows)) {
-          e.subRows.forEach(sub => {
-            exportData.push({ 
-              Date: '',
-              Particular: `    ${sub.particular || ''}`, VchType: '', VchNo: '', 
-              Debit: sub.debit || '', Credit: sub.credit || '',
-              DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: '', PaymentStatus: ''
-            });
-          });
-        }
-        
-        if (histReceived > 0 || histTds > 0) {
-          runningBalance -= (histReceived + histTds);
-          totalReceived += histReceived;
-          totalTds += histTds;
-        }
-      });
+      // Only create sheet if there's data
+      if (rows.length <= 7) return;
       
       // Totals
-      exportData.push({});
-      exportData.push({ 
-        Date: '',
-        Particular: 'TOTAL', VchType: '', VchNo: '', 
-        Debit: totalDebit, Credit: totalCredit,
-        DateOfReceipt: '', AmtReceived: totalReceived, TDS: totalTds, Balance: '', PaymentStatus: ''
-      });
-      exportData.push({ 
-        Date: '',
-        Particular: 'Closing Balance', VchType: '', VchNo: '', 
-        Debit: runningBalance > 0 ? runningBalance : '', Credit: runningBalance < 0 ? Math.abs(runningBalance) : '',
-        DateOfReceipt: '', AmtReceived: '', TDS: '', Balance: runningBalance, PaymentStatus: ''
-      });
+      rows.push([]);
+      rows.push(['', 'TOTAL', '', '', totalDebit, totalCredit, totalReceived, totalTds, '']);
+      rows.push(['', 'Closing Balance', '', '', runningBalance > 0 ? runningBalance : '', runningBalance < 0 ? Math.abs(runningBalance) : '', '', '', runningBalance]);
       
-      if (exportData.length > 10) {
-        let sheetName = party.substring(0, 25).replace(/[\\\/\*\?\[\]:]/g, '');
-        if (partyState) sheetName += '-' + partyState.substring(0, 4);
-        let uniqueName = sheetName;
-        let counter = 1;
-        while (wb.SheetNames.includes(uniqueName)) uniqueName = sheetName.substring(0, 27) + counter++;
-        
-        const ws = XLSX.utils.json_to_sheet(exportData, { skipHeader: true });
-        XLSX.utils.book_append_sheet(wb, ws, uniqueName);
-        sheetsAdded++;
-      }
+      // Create sheet with array of arrays
+      let sheetName = party.substring(0, 25).replace(/[\\\/\*\?\[\]:]/g, '');
+      if (partyState) sheetName += '-' + partyState.substring(0, 4);
+      let uniqueName = sheetName;
+      let counter = 1;
+      while (wb.SheetNames.includes(uniqueName)) uniqueName = sheetName.substring(0, 27) + counter++;
+      
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, uniqueName);
+      sheetsAdded++;
     });
     
-    if (sheetsAdded === 0) { alert('No ledger data'); return; }
+    if (sheetsAdded === 0) { alert('No ledger data to export'); return; }
     XLSX.writeFile(wb, `All_Ledgers_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
