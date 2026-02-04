@@ -388,6 +388,7 @@ export default function FinanceApp() {
   const [creditNotes, setCreditNotes] = useState([]);
   const [selectedParty, setSelectedParty] = useState(null);
   const [selectedPartyState, setSelectedPartyState] = useState(null); // Normalized state for multi-state party filtering
+  const [selectedPartyClientCode, setSelectedPartyClientCode] = useState(null); // Client Code for filtering
   const [nextInvoiceNo, setNextInvoiceNo] = useState(1);
   const [nextCombineNo, setNextCombineNo] = useState(1);
   const [nextReceiptNo, setNextReceiptNo] = useState(1);
@@ -2408,12 +2409,21 @@ Phone: ${companyConfig.phone}`;
 
   // View invoice from ledger
   const viewInvoiceFromLedger = (invoiceNo) => {
+    // Check masterData first
     const invoiceRow = masterData.find(r => r.invoiceNo === invoiceNo);
     if (invoiceRow) {
       downloadInvoice(invoiceRow);
-    } else {
-      alert('Invoice not found in system. This may be a historical entry.');
+      return;
     }
+    
+    // Check servicesData
+    const serviceRow = servicesData.find(r => r.invoiceNo === invoiceNo);
+    if (serviceRow) {
+      generateServiceInvoicePDF(serviceRow);
+      return;
+    }
+    
+    alert('Invoice not found in system. This may be a historical entry.');
   };
 
   // View Receipt details
@@ -2588,6 +2598,7 @@ Phone: ${companyConfig.phone}`;
     setNextServiceInvoiceNo(1);
     setSelectedParty(null);
     setSelectedPartyState(null);
+    setSelectedPartyClientCode(null);
     setExpandedParties(new Set());
     setFollowups([]);
     setPartyMaster({});
@@ -4015,8 +4026,18 @@ ${generateInvoiceHtml(row)}
       rawServicesData: servicesData
     });
     
-    const openServices = filteredServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved');
-    const closedServices = filteredServicesData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved');
+    const openServices = filteredServicesData.filter(r => 
+      !(r.toBeBilled === 'Yes' && 
+        r.invoiceGenerated && 
+        r.mailingSent === 'Yes' && 
+        (r.receiptStatus === 'Received' || r.receiptStatus === 'Cancelled' || r.receiptStatus === 'Closed'))
+    );
+    const closedServices = filteredServicesData.filter(r => 
+      r.toBeBilled === 'Yes' && 
+      r.invoiceGenerated && 
+      r.mailingSent === 'Yes' && 
+      (r.receiptStatus === 'Received' || r.receiptStatus === 'Cancelled' || r.receiptStatus === 'Closed')
+    );
     const filteredTabData = servicesSheetTab === 'open' ? openServices : closedServices;
     
     console.log('Services Tab Data:', { openCount: openServices.length, closedCount: closedServices.length, currentTab: servicesSheetTab });
@@ -4636,11 +4657,20 @@ ${generateInvoiceHtml(row)}
     partiesForLedger.forEach(partyInfo => {
       const party = partyInfo.partyName;
       const partyState = partyInfo.normalizedState;
+      const partyClientCode = partyInfo.clientCode || '';
       const opening = openingBalances[party] || 0;
       
-      // Get invoices
+      // Helper to check Client Code match
+      const matchesClientCode = (row) => {
+        if (!partyClientCode) return true;
+        const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
+        return rowClientCode === partyClientCode;
+      };
+      
+      // Get invoices (filter by Client Code)
       const partyInvoices = [...safeMasterData, ...safeServicesData].filter(r => 
         matchParty(r.partyName, party) && r.invoiceGenerated && r.invoiceStatus === 'Approved' &&
+        matchesClientCode(r) &&
         (!partyState || normalizeStateName(r.statePartyDetails) === partyState)
       );
       
@@ -4689,8 +4719,8 @@ ${generateInvoiceHtml(row)}
       let totalDebit = 0, totalCredit = 0, totalReceived = 0, totalTds = 0;
       const processedCNKeys = new Set();
       
-      // Header rows
-      rows.push([party]);
+      // Header rows - include Client Code (partyClientCode already defined above)
+      rows.push([partyClientCode ? `[${partyClientCode}] ${party}` : party]);
       rows.push(['Ledger Account']);
       if (partyInfo.address) rows.push([partyInfo.address]);
       if (partyInfo.state) rows.push([partyInfo.state]);
@@ -4906,8 +4936,10 @@ ${generateInvoiceHtml(row)}
     const receiptData = safeReceipts.map(r => {
       const amount = parseFloat(r.amount) || 0;
       const tds = parseFloat(r.tds) || parseFloat(r.tdsAmount) || 0;
+      const receiptClientCode = r.clientCode || getClientCode(r.partyName, r.statePartyDetails || '');
       return {
         'Type': 'Receipt',
+        'Client Code': receiptClientCode,
         'Voucher No': r.receiptNo,
         'Date': formatDate(r.date),
         'Party Name': r.partyName,
@@ -4922,8 +4954,10 @@ ${generateInvoiceHtml(row)}
     
     const cnData = safeCreditNotes.map(cn => {
       const cnAmounts = getCNAmounts(cn);
+      const cnClientCode = cn.clientCode || getClientCode(cn.partyName, cn.statePartyDetails || '');
       return {
         'Type': 'Credit Note',
+        'Client Code': cnClientCode,
         'Voucher No': cn.creditNoteNo,
         'Date': formatDate(cn.date),
         'Party Name': cn.partyName,
@@ -4953,7 +4987,7 @@ ${generateInvoiceHtml(row)}
     // Combined sheet
     const combinedData = [
       ...receiptData.map(r => ({ ...r, 'Base Amount': '', 'GST': '', 'Reason': '' })),
-      ...cnData.map(cn => ({ 'Type': cn.Type, 'Voucher No': cn['Voucher No'], 'Date': cn.Date, 'Party Name': cn['Party Name'], 'Against Invoice': cn['Against Invoice'], 'Amount': cn['Base Amount'], 'TDS': cn.GST, 'Total': cn.Total, 'Payment Mode': '', 'Narration': cn.Reason }))
+      ...cnData.map(cn => ({ 'Type': cn.Type, 'Client Code': cn['Client Code'], 'Voucher No': cn['Voucher No'], 'Date': cn.Date, 'Party Name': cn['Party Name'], 'Against Invoice': cn['Against Invoice'], 'Amount': cn['Base Amount'], 'TDS': cn.GST, 'Total': cn.Total, 'Payment Mode': '', 'Narration': cn.Reason }))
     ];
     const wsCombined = XLSX.utils.json_to_sheet(combinedData);
     XLSX.utils.book_append_sheet(wb, wsCombined, 'Combined');
@@ -6146,22 +6180,31 @@ ${generateInvoiceHtml(row)}
 
   const renderLedgers = () => {
     // Calculate closing balance - STATE-AWARE for multi-state parties
-    const getPartyBalance = (party, partyNormalizedState) => {
+    const getPartyBalance = (party, partyNormalizedState, partyClientCode) => {
       const opening = openingBalances[party] || 0;
       
-      // Get all invoices for this party+state from masterData (case-insensitive, state-aware)
+      // Helper to check if row matches the Client Code
+      const matchesClientCode = (row) => {
+        if (!partyClientCode) return true; // No Client Code filter
+        const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
+        return rowClientCode === partyClientCode;
+      };
+      
+      // Get all invoices for this party+state from masterData (case-insensitive, state-aware, Client Code aware)
       const partyInvoices = masterData.filter(r => 
         matchParty(r.partyName, party) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
+        matchesClientCode(r) &&
         (!partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
       );
       
-      // Get all service invoices for this party+state
+      // Get all service invoices for this party+state (Client Code aware)
       const partyServiceInvoices = servicesData.filter(r => 
         matchParty(r.partyName, party) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
+        matchesClientCode(r) &&
         (!partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
       );
       
@@ -6363,19 +6406,28 @@ ${generateInvoiceHtml(row)}
         return parts[parts.length - 1];
       };
       
-      // Get all invoices for this party+state from masterData (STATE-AWARE)
+      // Helper to check if row matches the selected Client Code
+      const matchesClientCode = (row) => {
+        if (!selectedPartyClientCode) return true; // No Client Code filter
+        const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
+        return rowClientCode === selectedPartyClientCode;
+      };
+      
+      // Get all invoices for this party+state from masterData (CLIENT CODE AWARE)
       const partyInvoices = masterData.filter(r => 
         matchParty(r.partyName, selectedParty) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
+        matchesClientCode(r) &&
         (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
       );
       
-      // Get service invoices for this party+state
+      // Get service invoices for this party+state (CLIENT CODE AWARE)
       const partyServiceInvoices = servicesData.filter(r => 
         matchParty(r.partyName, selectedParty) && 
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
+        matchesClientCode(r) &&
         (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
       );
       
@@ -6934,10 +6986,10 @@ ${generateInvoiceHtml(row)}
             <div style={{ maxHeight: '450px', overflowY: 'auto' }}>
               {filteredParties.length === 0 ? <div style={{ padding: '30px', textAlign: 'center', color: '#94A3B8', fontSize: '14px' }}>{ledgerPartySearch ? 'No matching parties' : 'No parties yet'}</div> : (
                 filteredParties.map((partyInfo, idx) => {
-                  const balance = getPartyBalance(partyInfo.partyName, partyInfo.normalizedState);
-                  const isSelected = matchParty(selectedParty, partyInfo.partyName) && selectedPartyState === partyInfo.normalizedState;
+                  const balance = getPartyBalance(partyInfo.partyName, partyInfo.normalizedState, partyInfo.clientCode);
+                  const isSelected = matchParty(selectedParty, partyInfo.partyName) && selectedPartyState === partyInfo.normalizedState && selectedPartyClientCode === partyInfo.clientCode;
                   return (
-                    <div key={`${partyInfo.partyName}-${partyInfo.state}-${idx}`} onClick={() => { setSelectedParty(partyInfo.partyName); setSelectedPartyState(partyInfo.normalizedState || null); }} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: isSelected ? '#EFF6FF' : 'transparent', borderLeft: isSelected ? '4px solid #2874A6' : '4px solid transparent' }}>
+                    <div key={`${partyInfo.partyName}-${partyInfo.state}-${partyInfo.clientCode}-${idx}`} onClick={() => { setSelectedParty(partyInfo.partyName); setSelectedPartyState(partyInfo.normalizedState || null); setSelectedPartyClientCode(partyInfo.clientCode || null); }} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: isSelected ? '#EFF6FF' : 'transparent', borderLeft: isSelected ? '4px solid #2874A6' : '4px solid transparent' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {partyInfo.clientCode && <span style={{ padding: '2px 6px', backgroundColor: '#F3E8FF', color: '#6B21A8', borderRadius: '4px', fontSize: '10px', fontWeight: '700' }}>{partyInfo.clientCode}</span>}
                         <span style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{partyInfo.partyName}</span>
