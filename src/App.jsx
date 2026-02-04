@@ -1174,9 +1174,11 @@ export default function FinanceApp() {
   }, [safeMasterData, safePartyMaster, safeLedgerEntries, safeOpeningBalances]);
 
   // Parties with state info for ledger - includes ALL from Party Master (CASE-INSENSITIVE)
+  // Uses Client Code as primary identifier to prevent duplicates
   const partiesForLedger = useMemo(() => {
     const partyList = [];
-    const addedNameStateKeys = new Set(); // partyName|state keys for Party Master multi-state dedup
+    const addedClientCodes = new Set(); // Track Client Codes to prevent duplicates
+    const addedNameStateKeys = new Set(); // partyName|state keys for fallback dedup
     const addedNameKeys = new Set(); // Just party name keys for cross-source dedup
     
     // Inline state normalization to avoid dependency on useCallback
@@ -1210,6 +1212,36 @@ export default function FinanceApp() {
       return s;
     };
     
+    // Helper to find Client Code from Party Master by party name and state
+    const findClientCode = (partyName, state) => {
+      if (!partyName) return '';
+      const nameUpper = partyName.trim().toUpperCase();
+      const normalizedState = normalizeState(state);
+      
+      // First try direct match
+      for (const [key, entry] of Object.entries(safePartyMaster)) {
+        if (entry.clientCode) {
+          const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+          const entryNormState = entry.normalizedState || normalizeState(entry.stateName);
+          if (entryNameUpper === nameUpper && entryNormState === normalizedState) {
+            return entry.clientCode;
+          }
+        }
+      }
+      
+      // Fallback: match by name only
+      for (const [key, entry] of Object.entries(safePartyMaster)) {
+        if (entry.clientCode) {
+          const entryNameUpper = (entry.partyName || '').trim().toUpperCase();
+          if (entryNameUpper === nameUpper) {
+            return entry.clientCode;
+          }
+        }
+      }
+      
+      return '';
+    };
+    
     // FIRST: Add ALL entries from Party Master (this is the primary source)
     // Party Master CAN have same party with different states (different GST registrations)
     Object.entries(safePartyMaster).forEach(([key, entry]) => {
@@ -1217,10 +1249,15 @@ export default function FinanceApp() {
         const normalizedState = entry.normalizedState || normalizeState(entry.stateName);
         const nameUpper = entry.partyName.trim().toUpperCase();
         const nameStateKey = `${nameUpper}|${normalizedState}`;
+        const clientCode = entry.clientCode || '';
         
-        if (!addedNameStateKeys.has(nameStateKey)) {
+        // Check by Client Code first, then by name+state
+        const isDuplicate = (clientCode && addedClientCodes.has(clientCode)) || addedNameStateKeys.has(nameStateKey);
+        
+        if (!isDuplicate) {
+          if (clientCode) addedClientCodes.add(clientCode);
           addedNameStateKeys.add(nameStateKey);
-          addedNameKeys.add(nameUpper); // Track that this party name exists
+          addedNameKeys.add(nameUpper);
           partyList.push({
             partyName: entry.partyName,
             partyNameUpper: nameUpper,
@@ -1228,56 +1265,80 @@ export default function FinanceApp() {
             normalizedState: normalizedState,
             gstin: entry.gstin || '',
             address: entry.address || '',
+            clientCode: clientCode,
             fromPartyMaster: true
           });
         }
       }
     });
     
-    // SECOND: Add from masterData - if party name+state combination doesn't already exist
+    // SECOND: Add from masterData - ONLY if Client Code doesn't exist in Party Master
     safeMasterData.forEach(r => {
       if (r.partyName) {
         const nameUpper = r.partyName.trim().toUpperCase();
         const normalizedState = normalizeState(r.statePartyDetails);
         const nameStateKey = `${nameUpper}|${normalizedState}`;
         
-        // Only skip if this exact name+state combination already exists
-        if (!addedNameStateKeys.has(nameStateKey)) {
-          addedNameStateKeys.add(nameStateKey);
-          addedNameKeys.add(nameUpper);
-          partyList.push({
-            partyName: r.partyName,
-            partyNameUpper: nameUpper,
-            state: r.statePartyDetails || '',
-            normalizedState: normalizedState,
-            gstin: '', // Will be looked up dynamically
-            address: '',
-            fromPartyMaster: false
-          });
+        // Check if this party+state has a Client Code in Party Master
+        const existingClientCode = r.clientCode || findClientCode(r.partyName, r.statePartyDetails);
+        
+        // If Client Code exists and already added, skip
+        if (existingClientCode && addedClientCodes.has(existingClientCode)) {
+          return; // Skip - party already exists from Party Master
         }
+        
+        // Also skip if name+state already exists
+        if (addedNameStateKeys.has(nameStateKey)) {
+          return;
+        }
+        
+        // New party - add it
+        if (existingClientCode) addedClientCodes.add(existingClientCode);
+        addedNameStateKeys.add(nameStateKey);
+        addedNameKeys.add(nameUpper);
+        partyList.push({
+          partyName: r.partyName,
+          partyNameUpper: nameUpper,
+          state: r.statePartyDetails || '',
+          normalizedState: normalizedState,
+          gstin: '', // Will be looked up dynamically
+          address: '',
+          clientCode: existingClientCode,
+          fromPartyMaster: false
+        });
       }
     });
     
-    // THIRD: Add from ledgerEntries - if party name+state combination doesn't already exist
+    // THIRD: Add from ledgerEntries - if party doesn't already exist
     safeLedgerEntries.forEach(e => {
       if (e.partyName) {
         const nameUpper = e.partyName.trim().toUpperCase();
         const normalizedState = normalizeState(e.state || e.statePartyDetails || '');
         const nameStateKey = `${nameUpper}|${normalizedState}`;
         
-        if (!addedNameStateKeys.has(nameStateKey)) {
-          addedNameStateKeys.add(nameStateKey);
-          addedNameKeys.add(nameUpper);
-          partyList.push({
-            partyName: e.partyName,
-            partyNameUpper: nameUpper,
-            state: e.state || e.statePartyDetails || '',
-            normalizedState: normalizedState,
-            gstin: '',
-            address: '',
-            fromPartyMaster: false
-          });
+        const existingClientCode = findClientCode(e.partyName, e.state || e.statePartyDetails);
+        
+        if (existingClientCode && addedClientCodes.has(existingClientCode)) {
+          return;
         }
+        
+        if (addedNameStateKeys.has(nameStateKey)) {
+          return;
+        }
+        
+        if (existingClientCode) addedClientCodes.add(existingClientCode);
+        addedNameStateKeys.add(nameStateKey);
+        addedNameKeys.add(nameUpper);
+        partyList.push({
+          partyName: e.partyName,
+          partyNameUpper: nameUpper,
+          state: e.state || e.statePartyDetails || '',
+          normalizedState: normalizedState,
+          gstin: '',
+          address: '',
+          clientCode: existingClientCode,
+          fromPartyMaster: false
+        });
       }
     });
     
@@ -1285,6 +1346,12 @@ export default function FinanceApp() {
     Object.keys(safeOpeningBalances).forEach(partyName => {
       const nameUpper = partyName.trim().toUpperCase();
       if (partyName && !addedNameKeys.has(nameUpper)) {
+        const existingClientCode = findClientCode(partyName, '');
+        if (existingClientCode && addedClientCodes.has(existingClientCode)) {
+          return;
+        }
+        
+        if (existingClientCode) addedClientCodes.add(existingClientCode);
         addedNameKeys.add(nameUpper);
         partyList.push({
           partyName: partyName,
@@ -1293,31 +1360,42 @@ export default function FinanceApp() {
           normalizedState: '',
           gstin: '',
           address: '',
+          clientCode: existingClientCode,
           fromPartyMaster: false
         });
       }
     });
     
-    // FIFTH: Add from servicesData - if party name+state combination doesn't already exist
+    // FIFTH: Add from servicesData - if party doesn't already exist
     safeServicesData.forEach(r => {
       if (r.partyName) {
         const nameUpper = r.partyName.trim().toUpperCase();
         const normalizedState = normalizeState(r.statePartyDetails);
         const nameStateKey = `${nameUpper}|${normalizedState}`;
         
-        if (!addedNameStateKeys.has(nameStateKey)) {
-          addedNameStateKeys.add(nameStateKey);
-          addedNameKeys.add(nameUpper);
-          partyList.push({
-            partyName: r.partyName,
-            partyNameUpper: nameUpper,
-            state: r.statePartyDetails || '',
-            normalizedState: normalizedState,
-            gstin: r.gstin || '',
-            address: r.address || '',
-            fromPartyMaster: false
-          });
+        const existingClientCode = r.clientCode || findClientCode(r.partyName, r.statePartyDetails);
+        
+        if (existingClientCode && addedClientCodes.has(existingClientCode)) {
+          return;
         }
+        
+        if (addedNameStateKeys.has(nameStateKey)) {
+          return;
+        }
+        
+        if (existingClientCode) addedClientCodes.add(existingClientCode);
+        addedNameStateKeys.add(nameStateKey);
+        addedNameKeys.add(nameUpper);
+        partyList.push({
+          partyName: r.partyName,
+          partyNameUpper: nameUpper,
+          state: r.statePartyDetails || '',
+          normalizedState: normalizedState,
+          gstin: r.gstin || '',
+          address: r.address || '',
+          clientCode: existingClientCode,
+          fromPartyMaster: false
+        });
       }
     });
     
@@ -3406,7 +3484,8 @@ ${generateInvoiceHtml(row)}
                                   {row.poStatus === 'With PO' ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                                       <span style={{ color: '#22C55E', fontWeight: '600', fontSize: '10px' }}>✓ PO</span>
-                                      <span style={{ fontSize: '9px', color: '#64748B' }}>{row.poNumber}</span>
+                                      <span style={{ fontSize: '9px', color: '#1E40AF', fontWeight: '600' }}>{row.poNumber}</span>
+                                      {row.poDate && <span style={{ fontSize: '9px', color: '#64748B' }}>{formatDate(row.poDate)}</span>}
                                     </div>
                                   ) : <span style={{ color: '#CBD5E1', fontSize: '10px' }}>No PO</span>}
                                 </td>
@@ -4152,7 +4231,8 @@ ${generateInvoiceHtml(row)}
                                 {row.poStatus === 'With PO' ? (
                                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                                     <span style={{ color: '#22C55E', fontWeight: '600', fontSize: '10px' }}>✓ PO</span>
-                                    <span style={{ fontSize: '9px', color: '#64748B' }}>{row.poNumber}</span>
+                                    <span style={{ fontSize: '9px', color: '#1E40AF', fontWeight: '600' }}>{row.poNumber}</span>
+                                    {row.poDate && <span style={{ fontSize: '9px', color: '#64748B' }}>{formatDate(row.poDate)}</span>}
                                   </div>
                                 ) : <span style={{ color: '#CBD5E1', fontSize: '10px' }}>No PO</span>}
                               </td>
@@ -6858,7 +6938,10 @@ ${generateInvoiceHtml(row)}
                   const isSelected = matchParty(selectedParty, partyInfo.partyName) && selectedPartyState === partyInfo.normalizedState;
                   return (
                     <div key={`${partyInfo.partyName}-${partyInfo.state}-${idx}`} onClick={() => { setSelectedParty(partyInfo.partyName); setSelectedPartyState(partyInfo.normalizedState || null); }} style={{ padding: '14px 18px', borderBottom: '1px solid #F1F5F9', cursor: 'pointer', backgroundColor: isSelected ? '#EFF6FF' : 'transparent', borderLeft: isSelected ? '4px solid #2874A6' : '4px solid transparent' }}>
-                      <div style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{partyInfo.partyName}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {partyInfo.clientCode && <span style={{ padding: '2px 6px', backgroundColor: '#F3E8FF', color: '#6B21A8', borderRadius: '4px', fontSize: '10px', fontWeight: '700' }}>{partyInfo.clientCode}</span>}
+                        <span style={{ fontWeight: '600', fontSize: '14px', color: '#1E293B' }}>{partyInfo.partyName}</span>
+                      </div>
                       {partyInfo.state && <div style={{ fontSize: '11px', color: '#64748B', marginTop: '2px' }}>📍 {partyInfo.state}</div>}
                       {partyInfo.gstin && <div style={{ fontSize: '10px', color: '#2874A6', marginTop: '1px' }}>GST: {partyInfo.gstin}</div>}
                       <div style={{ fontSize: '14px', color: balance > 0 ? '#DC2626' : '#059669', fontWeight: '700', marginTop: '4px' }}>{balance > 0 ? 'Dr. ' : 'Cr. '}{formatCurrency(Math.abs(balance))}</div>
@@ -6883,7 +6966,15 @@ ${generateInvoiceHtml(row)}
                 
                 {/* Party Info */}
                 <div style={{ textAlign: 'center', padding: '12px', borderBottom: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
-                  <div style={{ fontSize: '14px', fontWeight: '700', color: '#1E293B' }}>{selectedParty}</div>
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '8px' }}>
+                    {(() => {
+                      const selectedPartyInfo = filteredParties.find(p => matchParty(p.partyName, selectedParty) && p.normalizedState === selectedPartyState);
+                      return selectedPartyInfo?.clientCode ? (
+                        <span style={{ padding: '3px 8px', backgroundColor: '#F3E8FF', color: '#6B21A8', borderRadius: '6px', fontSize: '12px', fontWeight: '700' }}>{selectedPartyInfo.clientCode}</span>
+                      ) : null;
+                    })()}
+                    <span style={{ fontSize: '14px', fontWeight: '700', color: '#1E293B' }}>{selectedParty}</span>
+                  </div>
                   <div style={{ fontSize: '11px', fontWeight: '600', color: '#64748B' }}>Ledger Account</div>
                   {getSelectedPartyFullAddress(selectedParty) && (
                     <div style={{ fontSize: '11px', color: '#475569', marginTop: '4px' }}>{getSelectedPartyFullAddress(selectedParty)}</div>
