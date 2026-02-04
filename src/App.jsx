@@ -3724,12 +3724,21 @@ ${generateInvoiceHtml(row)}
     const isDirector = userRole === 'director';
     const canEdit = userRole === 'finance';
     
-    // Debug: Log services data count
-    console.log('Services Data:', safeServicesData.length, 'entries, Role:', userRole);
+    // Debug: Log services data with more detail
+    console.log('Services Debug:', {
+      safeServicesDataLength: safeServicesData.length,
+      filteredServicesDataLength: filteredServicesData.length,
+      role: userRole,
+      serviceFilters,
+      servicesSheetTab,
+      sample: safeServicesData.slice(0, 2)
+    });
     
     const openServices = filteredServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved');
     const closedServices = filteredServicesData.filter(r => r.invoiceGenerated && r.invoiceStatus === 'Approved');
     const filteredTabData = servicesSheetTab === 'open' ? openServices : closedServices;
+    
+    console.log('Services Tab Data:', { openCount: openServices.length, closedCount: closedServices.length, currentTab: servicesSheetTab });
     
     const groupedByParty = {};
     filteredTabData.forEach(row => {
@@ -3738,6 +3747,12 @@ ${generateInvoiceHtml(row)}
       groupedByParty[party].push(row);
     });
     const sortedParties = Object.keys(groupedByParty).sort();
+    
+    // Auto-expand all parties for Director view
+    if (isDirector && sortedParties.length > 0 && expandedServiceParties.size === 0) {
+      const allParties = new Set(sortedParties);
+      setExpandedServiceParties(allParties);
+    }
     
     return (
       <div style={{ padding: '20px' }}>
@@ -4073,7 +4088,7 @@ ${generateInvoiceHtml(row)}
         
         const receiptInfo = safeReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
         const totalReceived = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-        const totalTds = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+        const totalTds = receiptInfo.reduce((sum, r) => sum + (parseFloat(r.tds || r.tdsAmount) || 0), 0);
         const balance = inv.totalAmount - totalReceived - totalTds - cnAmount;
         
         // Determine receipt status exactly as shown in UI
@@ -4288,7 +4303,7 @@ ${generateInvoiceHtml(row)}
           // Get receipt for this invoice
           const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
           const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-          const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+          const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tds || r.tdsAmount) || 0), 0);
           
           // Check for CN
           const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
@@ -4414,8 +4429,8 @@ ${generateInvoiceHtml(row)}
       'Party Name': r.partyName,
       'Against Invoice': r.invoiceNo,
       'Amount': parseFloat(r.amount) || 0,
-      'TDS': parseFloat(r.tdsAmount) || 0,
-      'Total': (parseFloat(r.amount) || 0) + (parseFloat(r.tdsAmount) || 0),
+      'TDS': parseFloat(r.tds || r.tdsAmount) || 0,
+      'Total': (parseFloat(r.amount) || 0) + (parseFloat(r.tds || r.tdsAmount) || 0),
       'Payment Mode': r.paymentMode || 'Bank Transfer',
       'Narration': r.narration || ''
     }));
@@ -4442,7 +4457,10 @@ ${generateInvoiceHtml(row)}
   
   // Generate Receipt Voucher PDF
   const generateReceiptVoucher = (receipt) => {
-    const html = `<!DOCTYPE html><html><head><title>Receipt - ${receipt.receiptNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#f5f5f5}.title{font-size:18px;font-weight:bold;color:#1a5276}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#e8f4fd;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#1a5276}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">RECEIPT VOUCHER</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Receipt No:</div><div class="value" style="font-weight:bold;color:#1a5276">${receipt.receiptNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(receipt.date)}</div></div><div class="row"><div class="label">Received From:</div><div class="value" style="font-weight:bold">${receipt.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${receipt.invoiceNo}</div></div><div class="row"><div class="label">Payment Mode:</div><div class="value">${receipt.paymentMode || 'Bank Transfer'}</div></div>${receipt.narration ? `<div class="row"><div class="label">Narration:</div><div class="value">${receipt.narration}</div></div>` : ''}<div class="amount-box"><div style="font-size:12px;color:#666">Amount Received</div><div class="amount">₹${(parseFloat(receipt.amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>${receipt.tdsAmount && parseFloat(receipt.tdsAmount) > 0 ? `<div style="font-size:11px;color:#666;margin-top:5px">TDS: ₹${parseFloat(receipt.tdsAmount).toLocaleString('en-IN')}</div>` : ''}<div style="font-size:11px;margin-top:8px"><strong>Total:</strong> ₹${((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0)).toLocaleString('en-IN')}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}</div></div><div class="footer"><div class="signature"><div class="signature-line">Receiver's Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
+    const amount = parseFloat(receipt.amount) || 0;
+    const tds = parseFloat(receipt.tds) || parseFloat(receipt.tdsAmount) || 0;
+    const total = amount + tds;
+    const html = `<!DOCTYPE html><html><head><title>Receipt - ${receipt.receiptNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#f5f5f5}.title{font-size:18px;font-weight:bold;color:#1a5276}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#e8f4fd;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#1a5276}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">RECEIPT VOUCHER</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Receipt No:</div><div class="value" style="font-weight:bold;color:#1a5276">${receipt.receiptNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(receipt.date)}</div></div><div class="row"><div class="label">Received From:</div><div class="value" style="font-weight:bold">${receipt.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${receipt.invoiceNo}</div></div><div class="row"><div class="label">Payment Mode:</div><div class="value">${receipt.paymentMode || receipt.mode || 'Bank Transfer'}</div></div>${receipt.narration ? `<div class="row"><div class="label">Narration:</div><div class="value">${receipt.narration}</div></div>` : ''}<div class="amount-box"><div style="font-size:12px;color:#666">Amount Received</div><div class="amount">₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>${tds > 0 ? `<div style="font-size:11px;color:#666;margin-top:5px">TDS: ₹${tds.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div>` : ''}<div style="font-size:11px;margin-top:8px"><strong>Total:</strong> ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords(total)}</div></div><div class="footer"><div class="signature"><div class="signature-line">Receiver's Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
     const printWindow = window.open('', '_blank');
     printWindow.document.write(html);
     printWindow.document.close();
@@ -4451,7 +4469,15 @@ ${generateInvoiceHtml(row)}
   
   // Generate CN Voucher PDF
   const generateCreditNoteVoucher = (cn) => {
-    const html = `<!DOCTYPE html><html><head><title>CN - ${cn.creditNoteNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#fef3c7}.title{font-size:18px;font-weight:bold;color:#92400e}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#fef3c7;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#92400e}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">CREDIT NOTE</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Credit Note No:</div><div class="value" style="font-weight:bold;color:#92400e">${cn.creditNoteNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(cn.date)}</div></div><div class="row"><div class="label">Party Name:</div><div class="value" style="font-weight:bold">${cn.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${cn.invoiceNo}</div></div><div class="row"><div class="label">Reason:</div><div class="value">${cn.reason || 'Adjustment'}</div></div><div class="amount-box"><div style="font-size:12px;color:#666">Credit Amount</div><div class="amount">₹${(parseFloat(cn.totalAmount) || 0).toLocaleString('en-IN')}</div><div style="font-size:10px;color:#666;margin-top:5px">Base: ₹${(parseFloat(cn.baseAmount) || 0).toLocaleString('en-IN')} | GST: ₹${((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0)).toLocaleString('en-IN')}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords(parseFloat(cn.totalAmount) || 0)}</div></div><div class="footer"><div class="signature"><div class="signature-line">Party Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
+    const total = parseFloat(cn.totalAmount) || 0;
+    // Calculate base and GST - use stored values or calculate from total
+    let base = parseFloat(cn.baseAmount) || parseFloat(cn.amount) || 0;
+    let gst = parseFloat(cn.gst) || (parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0);
+    if (base === 0 && total > 0) {
+      base = total / 1.18;
+      gst = total - base;
+    }
+    const html = `<!DOCTYPE html><html><head><title>CN - ${cn.creditNoteNo}</title><style>@media print{@page{size:A5;margin:10mm}}*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:20px}.voucher{max-width:600px;margin:0 auto;border:2px solid #000}.header{text-align:center;padding:15px;border-bottom:2px solid #000;background:#fef3c7}.title{font-size:18px;font-weight:bold;color:#92400e}.company{font-size:14px;font-weight:bold;margin-top:5px}.details{padding:15px}.row{display:flex;margin-bottom:10px}.label{width:140px;font-weight:bold}.value{flex:1}.amount-box{background:#fef3c7;padding:15px;margin:15px 0;border-radius:8px;text-align:center}.amount{font-size:24px;font-weight:bold;color:#92400e}.footer{padding:15px;border-top:1px solid #ddd;display:flex;justify-content:space-between}.signature{text-align:center;margin-top:40px}.signature-line{border-top:1px solid #000;width:150px;margin:0 auto;padding-top:5px}</style></head><body><div class="voucher"><div class="header"><div class="title">CREDIT NOTE</div><div class="company">${companyConfig.name}</div><div style="font-size:10px;color:#666;margin-top:3px">${companyConfig.address}, ${companyConfig.city}</div></div><div class="details"><div class="row"><div class="label">Credit Note No:</div><div class="value" style="font-weight:bold;color:#92400e">${cn.creditNoteNo}</div></div><div class="row"><div class="label">Date:</div><div class="value">${formatDate(cn.date)}</div></div><div class="row"><div class="label">Party Name:</div><div class="value" style="font-weight:bold">${cn.partyName}</div></div><div class="row"><div class="label">Against Invoice:</div><div class="value">${cn.invoiceNo}</div></div><div class="row"><div class="label">Reason:</div><div class="value">${cn.reason || 'Adjustment'}</div></div><div class="amount-box"><div style="font-size:12px;color:#666">Credit Amount</div><div class="amount">₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div><div style="font-size:10px;color:#666;margin-top:5px">Base: ₹${base.toLocaleString('en-IN', { minimumFractionDigits: 2 })} | GST: ₹${gst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</div></div><div style="font-size:11px;color:#666;margin-top:10px"><strong>Amount in words:</strong> ${numberToWords(total)}</div></div><div class="footer"><div class="signature"><div class="signature-line">Party Signature</div></div><div class="signature"><div class="signature-line">Authorised Signatory</div></div></div></div></body></html>`;
     const printWindow = window.open('', '_blank');
     printWindow.document.write(html);
     printWindow.document.close();
@@ -5426,9 +5452,26 @@ ${generateInvoiceHtml(row)}
   const renderReceiptRegister = () => {
     const sortedReceipts = [...filteredReceipts].sort((a, b) => new Date(b.date) - new Date(a.date));
     const sortedCNs = [...filteredCNs].sort((a, b) => new Date(b.date) - new Date(a.date));
+    // TDS is stored as 'tds' not 'tdsAmount'
     const totalReceived = sortedReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
-    const totalTds = sortedReceipts.reduce((sum, r) => sum + (parseFloat(r.tdsAmount) || 0), 0);
+    const totalTds = sortedReceipts.reduce((sum, r) => sum + (parseFloat(r.tds) || parseFloat(r.tds || r.tdsAmount) || 0), 0);
     const totalCN = sortedCNs.reduce((sum, cn) => sum + (parseFloat(cn.totalAmount) || 0), 0);
+    
+    // Helper to get CN base and GST (calculate if not stored)
+    const getCNAmounts = (cn) => {
+      const total = parseFloat(cn.totalAmount) || 0;
+      // Check if base amount is stored directly
+      let base = parseFloat(cn.baseAmount) || parseFloat(cn.amount) || 0;
+      let gst = parseFloat(cn.gst) || (parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0);
+      
+      // If base is 0 but total exists, calculate from total
+      if (base === 0 && total > 0) {
+        base = total / 1.18;
+        gst = total - base;
+      }
+      
+      return { base, gst, total };
+    };
     
     return (
       <div style={{ padding: '20px' }}>
@@ -5500,19 +5543,22 @@ ${generateInvoiceHtml(row)}
             <tbody>
               {sortedReceipts.length === 0 ? (
                 <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No receipts found</td></tr>
-              ) : sortedReceipts.map(receipt => (
+              ) : sortedReceipts.map(receipt => {
+                const amount = parseFloat(receipt.amount) || 0;
+                const tds = parseFloat(receipt.tds) || parseFloat(receipt.tdsAmount) || 0;
+                return (
                 <tr key={receipt.id || receipt.receiptNo} style={{ borderBottom: '1px solid #F1F5F9' }}>
                   <td style={{ padding: '12px', fontWeight: '600', color: '#2874A6' }}>{receipt.receiptNo}</td>
                   <td style={{ padding: '12px' }}>{formatDate(receipt.date)}</td>
                   <td style={{ padding: '12px', fontWeight: '500' }}>{receipt.partyName}</td>
                   <td style={{ padding: '12px', color: '#64748B' }}>{receipt.invoiceNo}</td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#166534', backgroundColor: '#F0FDF4' }}>{formatCurrency(parseFloat(receipt.amount) || 0)}</td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#92400E', backgroundColor: '#FEF3C7' }}>{formatCurrency(parseFloat(receipt.tdsAmount) || 0)}</td>
-                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700' }}>{formatCurrency((parseFloat(receipt.amount) || 0) + (parseFloat(receipt.tdsAmount) || 0))}</td>
-                  <td style={{ padding: '12px', textAlign: 'center' }}><span style={{ padding: '4px 8px', fontSize: '10px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#E0E7FF', color: '#3730A3' }}>{receipt.paymentMode || 'Bank Transfer'}</span></td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#166534', backgroundColor: '#F0FDF4' }}>{formatCurrency(amount)}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '600', color: '#92400E', backgroundColor: '#FEF3C7' }}>{formatCurrency(tds)}</td>
+                  <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700' }}>{formatCurrency(amount + tds)}</td>
+                  <td style={{ padding: '12px', textAlign: 'center' }}><span style={{ padding: '4px 8px', fontSize: '10px', fontWeight: '600', borderRadius: '9999px', backgroundColor: '#E0E7FF', color: '#3730A3' }}>{receipt.paymentMode || receipt.mode || 'Bank Transfer'}</span></td>
                   <td style={{ padding: '12px', textAlign: 'center' }}><button onClick={() => generateReceiptVoucher(receipt)} style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#2874A6', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}><Printer size={12} /> Print</button></td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </Card>
@@ -5537,19 +5583,21 @@ ${generateInvoiceHtml(row)}
               <tbody>
                 {sortedCNs.length === 0 ? (
                   <tr><td colSpan="9" style={{ padding: '50px', textAlign: 'center', color: '#94A3B8' }}>No credit notes found</td></tr>
-                ) : sortedCNs.map(cn => (
+                ) : sortedCNs.map(cn => {
+                  const cnAmounts = getCNAmounts(cn);
+                  return (
                   <tr key={cn.id || cn.creditNoteNo} style={{ borderBottom: '1px solid #F1F5F9', backgroundColor: '#FFFBEB' }}>
                     <td style={{ padding: '12px', fontWeight: '600', color: '#92400E' }}>{cn.creditNoteNo}</td>
                     <td style={{ padding: '12px' }}>{formatDate(cn.date)}</td>
                     <td style={{ padding: '12px', fontWeight: '500' }}>{cn.partyName}</td>
                     <td style={{ padding: '12px', color: '#64748B' }}>{cn.invoiceNo}</td>
-                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency(parseFloat(cn.baseAmount) || 0)}</td>
-                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency((parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0))}</td>
-                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#92400E' }}>{formatCurrency(parseFloat(cn.totalAmount) || 0)}</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency(cnAmounts.base)}</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>{formatCurrency(cnAmounts.gst)}</td>
+                    <td style={{ padding: '12px', textAlign: 'right', fontWeight: '700', color: '#92400E' }}>{formatCurrency(cnAmounts.total)}</td>
                     <td style={{ padding: '12px', fontSize: '11px', color: '#64748B' }}>{cn.reason || '-'}</td>
                     <td style={{ padding: '12px', textAlign: 'center' }}><button onClick={() => generateCreditNoteVoucher(cn)} style={{ padding: '6px 10px', fontSize: '11px', backgroundColor: '#92400E', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}><Printer size={12} /> Print</button></td>
                   </tr>
-                ))}
+                )})}
               </tbody>
             </table>
           </Card>
