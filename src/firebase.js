@@ -75,6 +75,7 @@ export const saveAppState = async (userId, state) => {
     // Save master data
     await setDoc(doc(db, "appState", userId), {
       masterData: state.masterData || [],
+      servicesData: state.servicesData || [],
       ledgerEntries: state.ledgerEntries || [],
       receipts: state.receipts || [],
       creditNotes: state.creditNotes || [],
@@ -86,11 +87,13 @@ export const saveAppState = async (userId, state) => {
       nextCombineNo: state.nextCombineNo || 1,
       nextReceiptNo: state.nextReceiptNo || 1,
       nextCreditNoteNo: state.nextCreditNoteNo || 1,
+      nextServiceInvoiceNo: state.nextServiceInvoiceNo || 1,
       invoiceValues: state.invoiceValues || {},
       notifications: state.notifications || [],
       whatsappSettings: state.whatsappSettings || {},
       partyMaster: state.partyMaster || [],
       followups: state.followups || [],
+      userPasswords: state.userPasswords || {},
       updatedAt: new Date().toISOString()
     });
     return true;
