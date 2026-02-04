@@ -3298,7 +3298,7 @@ ${generateInvoiceHtml(row)}
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
           </button>
-          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix16</div>}
+          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix17</div>}
         </div>
       </div>
     );
@@ -6445,10 +6445,26 @@ ${generateInvoiceHtml(row)}
     };
     
     // Filter parties by search (search in party name and state)
-    const filteredParties = partiesForLedger.filter(p => 
-      p.partyName.toLowerCase().includes(ledgerPartySearch.toLowerCase()) ||
-      (p.state && p.state.toLowerCase().includes(ledgerPartySearch.toLowerCase()))
-    );
+    // ALSO: Remove any party without clientCode if same name has entries WITH clientCode
+    const partyNamesWithCodesSet = new Set();
+    partiesForLedger.forEach(p => {
+      if (p.clientCode) {
+        partyNamesWithCodesSet.add(p.partyNameUpper);
+      }
+    });
+    
+    const filteredParties = partiesForLedger.filter(p => {
+      // First check: Remove parties without code if same name has codes
+      if (!p.clientCode && partyNamesWithCodesSet.has(p.partyNameUpper)) {
+        console.log('RENDER FILTER - Removing party without code:', p.partyName);
+        return false;
+      }
+      // Then apply search filter
+      return p.partyName.toLowerCase().includes(ledgerPartySearch.toLowerCase()) ||
+        (p.state && p.state.toLowerCase().includes(ledgerPartySearch.toLowerCase()));
+    });
+    
+    console.log('filteredParties after render filter:', filteredParties.length, filteredParties.map(p => ({ name: p.partyName, code: p.clientCode })));
     
     // Get party info from partiesForLedger (STATE-AWARE)
     const getPartyInfo = (partyName) => {
