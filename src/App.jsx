@@ -150,9 +150,18 @@ const ActionButton = ({ icon: Icon, label, onClick, variant = 'default', disable
   };
   const v = variants[variant] || variants.default;
   
+  const handleClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled && onClick) {
+      onClick(e);
+    }
+  };
+  
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={handleClick}
       disabled={disabled}
       title={label}
       style={{
@@ -1181,6 +1190,7 @@ export default function FinanceApp() {
     const addedClientCodes = new Set(); // Track Client Codes to prevent duplicates
     const addedNameStateKeys = new Set(); // partyName|state keys for fallback dedup
     const addedNameKeys = new Set(); // Just party name keys for cross-source dedup
+    const partyNamesWithCodes = new Set(); // Track party names that have ANY client code
     
     // Inline state normalization to avoid dependency on useCallback
     const normalizeState = (state) => {
@@ -1243,33 +1253,52 @@ export default function FinanceApp() {
       return '';
     };
     
+    // PRE-SCAN: First find all party names that have client codes in Party Master
+    Object.entries(safePartyMaster).forEach(([key, entry]) => {
+      if (entry.partyName && entry.clientCode) {
+        partyNamesWithCodes.add(entry.partyName.trim().toUpperCase());
+      }
+    });
+    
     // FIRST: Add ALL entries from Party Master (this is the primary source)
     // Party Master CAN have same party with different states (different GST registrations)
     Object.entries(safePartyMaster).forEach(([key, entry]) => {
       if (entry.partyName) {
         const normalizedState = entry.normalizedState || normalizeState(entry.stateName);
         const nameUpper = entry.partyName.trim().toUpperCase();
-        const nameStateKey = `${nameUpper}|${normalizedState}`;
         const clientCode = entry.clientCode || '';
         
-        // Check by Client Code first, then by name+state
-        const isDuplicate = (clientCode && addedClientCodes.has(clientCode)) || addedNameStateKeys.has(nameStateKey);
+        // Use Client Code as primary key if available
+        const uniqueKey = clientCode || `${nameUpper}|${normalizedState}`;
         
-        if (!isDuplicate) {
-          if (clientCode) addedClientCodes.add(clientCode);
-          addedNameStateKeys.add(nameStateKey);
-          addedNameKeys.add(nameUpper);
-          partyList.push({
-            partyName: entry.partyName,
-            partyNameUpper: nameUpper,
-            state: entry.stateName || '',
-            normalizedState: normalizedState,
-            gstin: entry.gstin || '',
-            address: entry.address || '',
-            clientCode: clientCode,
-            fromPartyMaster: true
-          });
+        // Skip if this Client Code already added
+        if (clientCode && addedClientCodes.has(clientCode)) {
+          return;
         }
+        
+        // Skip parties without code if they have entries WITH codes
+        if (!clientCode && partyNamesWithCodes.has(nameUpper)) {
+          return; // Skip - this party has Client Codes, don't create ledger without code
+        }
+        
+        const nameStateKey = `${nameUpper}|${normalizedState}`;
+        if (addedNameStateKeys.has(nameStateKey)) {
+          return;
+        }
+        
+        if (clientCode) addedClientCodes.add(clientCode);
+        addedNameStateKeys.add(nameStateKey);
+        addedNameKeys.add(nameUpper);
+        partyList.push({
+          partyName: entry.partyName,
+          partyNameUpper: nameUpper,
+          state: entry.stateName || '',
+          normalizedState: normalizedState,
+          gstin: entry.gstin || '',
+          address: entry.address || '',
+          clientCode: clientCode,
+          fromPartyMaster: true
+        });
       }
     });
     
@@ -1286,6 +1315,11 @@ export default function FinanceApp() {
         // If Client Code exists and already added, skip
         if (existingClientCode && addedClientCodes.has(existingClientCode)) {
           return; // Skip - party already exists from Party Master
+        }
+        
+        // Skip parties without code if they have entries WITH codes in Party Master
+        if (!existingClientCode && partyNamesWithCodes.has(nameUpper)) {
+          return; // Skip - this party has Client Codes, don't create ledger without code
         }
         
         // Also skip if name+state already exists
@@ -1323,6 +1357,11 @@ export default function FinanceApp() {
           return;
         }
         
+        // Skip parties without code if they have entries WITH codes in Party Master
+        if (!existingClientCode && partyNamesWithCodes.has(nameUpper)) {
+          return; // Skip - this party has Client Codes, don't create ledger without code
+        }
+        
         if (addedNameStateKeys.has(nameStateKey)) {
           return;
         }
@@ -1352,6 +1391,11 @@ export default function FinanceApp() {
           return;
         }
         
+        // Skip parties without code if they have entries WITH codes in Party Master
+        if (!existingClientCode && partyNamesWithCodes.has(nameUpper)) {
+          return; // Skip - this party has Client Codes, don't create ledger without code
+        }
+        
         if (existingClientCode) addedClientCodes.add(existingClientCode);
         addedNameKeys.add(nameUpper);
         partyList.push({
@@ -1378,6 +1422,11 @@ export default function FinanceApp() {
         
         if (existingClientCode && addedClientCodes.has(existingClientCode)) {
           return;
+        }
+        
+        // Skip parties without code if they have entries WITH codes in Party Master
+        if (!existingClientCode && partyNamesWithCodes.has(nameUpper)) {
+          return; // Skip - this party has Client Codes, don't create ledger without code
         }
         
         if (addedNameStateKeys.has(nameStateKey)) {
