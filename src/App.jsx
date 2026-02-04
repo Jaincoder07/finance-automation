@@ -2014,8 +2014,44 @@ export default function FinanceApp() {
     if (!selectedRow) return;
     
     const invoiceNo = selectedRow.invoiceNo;
+    const isServiceInvoice = selectedRow.isService || selectedRow.invoiceType === 'Service';
     
-    if (selectedRow.invoiceType === 'Combined' && selectedRow.combinationCode !== 'NA') {
+    // Extract invoice number for potential reuse
+    const invoiceNoMatch = invoiceNo.match(/(\d+)$/);
+    if (invoiceNoMatch) {
+      const deletedNum = parseInt(invoiceNoMatch[1]);
+      // If this was the last invoice, decrement the counter
+      if (deletedNum === nextInvoiceNo - 1) {
+        setNextInvoiceNo(prev => prev - 1);
+      }
+    }
+    
+    if (isServiceInvoice) {
+      // Handle Service Invoice deletion
+      setServicesData(prev => prev.map(r => {
+        if (r.invoiceNo === invoiceNo) {
+          return {
+            ...r,
+            invoiceNo: '',
+            invoiceDate: '',
+            invoiceTotalAmount: '',
+            cgst: '',
+            sgst: '',
+            igst: '',
+            totalWithGst: '',
+            invoiceGenerated: false,
+            invoiceStatus: 'Pending',
+            mailingSent: 'No',
+            mailDate: '',
+            editComments: '',
+            receiptStatus: '',
+            receiptNo: '',
+            receiptDate: ''
+          };
+        }
+        return r;
+      }));
+    } else if (selectedRow.invoiceType === 'Combined' && selectedRow.combinationCode !== 'NA') {
       // Reset all rows with this combination code
       setMasterData(prev => prev.map(r => {
         if (r.combinationCode === selectedRow.combinationCode) {
@@ -2039,7 +2075,7 @@ export default function FinanceApp() {
         return r;
       }));
     } else {
-      // Reset single row
+      // Reset single row from Master Sheet
       setMasterData(prev => prev.map(r => {
         if (r.id === selectedRow.id) {
           return {
@@ -2072,11 +2108,18 @@ export default function FinanceApp() {
       setReceipts(prev => prev.filter(r => r.invoiceNo !== invoiceNo));
     }
     
+    // Remove any credit notes associated with this invoice
+    const deletedCNs = creditNotes.filter(cn => cn.invoiceNo === invoiceNo);
+    if (deletedCNs.length > 0) {
+      setCreditNotes(prev => prev.filter(cn => cn.invoiceNo !== invoiceNo));
+    }
+    
     setShowDeleteConfirmModal(false);
     setSelectedRow(null);
     
     const receiptMsg = deletedReceipts.length > 0 ? `\n${deletedReceipts.length} receipt(s) also deleted.` : '';
-    alert(`✅ Invoice ${invoiceNo} deleted.${receiptMsg}\n\nYou can now regenerate the invoice.`);
+    const cnMsg = deletedCNs.length > 0 ? `\n${deletedCNs.length} credit note(s) also deleted.` : '';
+    alert(`✅ Invoice ${invoiceNo} deleted.${receiptMsg}${cnMsg}\n\nYou can now regenerate the invoice.`);
   };
 
   // Delete Receipt
@@ -2342,7 +2385,87 @@ Phone: ${companyConfig.phone}`;
       const workbook = XLSX.read(event.target.result, { type: 'binary', cellDates: true });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
-      const data = XLSX.utils.sheet_to_json(sheet, { raw: false });
+      
+      // Read raw data to check for Client Name and Code at top
+      const rawData = XLSX.utils.sheet_to_json(sheet, { raw: false, header: 1 });
+      
+      console.log('Raw data rows:', rawData.length);
+      console.log('First 10 rows:', rawData.slice(0, 10));
+      
+      // Check if first rows contain Client Name and Code
+      let clientNameFromFile = '';
+      let clientCodeFromFile = '';
+      let headerRowIndex = -1;
+      
+      // Scan first 10 rows to find Client Name, Code, and header row
+      for (let i = 0; i < Math.min(10, rawData.length); i++) {
+        const row = rawData[i];
+        if (!row || row.length === 0) continue;
+        
+        const firstCell = String(row[0] || '').trim().toLowerCase();
+        
+        // Check for Client Name
+        if (firstCell === 'client name' || firstCell === 'client') {
+          clientNameFromFile = String(row[1] || '').trim();
+          console.log('Found Client Name at row', i, ':', clientNameFromFile);
+        }
+        
+        // Check for Code
+        if (firstCell === 'code' || firstCell === 'client code') {
+          clientCodeFromFile = String(row[1] || '').trim();
+          console.log('Found Code at row', i, ':', clientCodeFromFile);
+        }
+        
+        // Look for the header row with Date column (case-insensitive)
+        const hasDateColumn = row.some(cell => 
+          String(cell || '').trim().toLowerCase() === 'date'
+        );
+        
+        if (hasDateColumn) {
+          headerRowIndex = i;
+          console.log('Found header row at index:', headerRowIndex, 'Row content:', row);
+          break;
+        }
+      }
+      
+      // If no header row found, try to find it by looking for "Vch Type" or "Debit"
+      if (headerRowIndex === -1) {
+        for (let i = 0; i < Math.min(10, rawData.length); i++) {
+          const row = rawData[i];
+          if (!row || row.length === 0) continue;
+          
+          const hasVchType = row.some(cell => 
+            String(cell || '').toLowerCase().includes('vch type')
+          );
+          const hasDebit = row.some(cell => 
+            String(cell || '').toLowerCase() === 'debit'
+          );
+          
+          if (hasVchType || hasDebit) {
+            headerRowIndex = i;
+            console.log('Found header row by Vch Type/Debit at index:', headerRowIndex);
+            break;
+          }
+        }
+      }
+      
+      console.log('File info:', { clientNameFromFile, clientCodeFromFile, headerRowIndex });
+      
+      if (headerRowIndex === -1) {
+        alert(`⚠️ Could not find header row in the file.\n\nMake sure your file has a row with columns like:\nDate | Particular | Vch Type | Vch No. | Debit | Credit`);
+        e.target.value = '';
+        return;
+      }
+      
+      // Use Client Code from file if available, otherwise use selected party's client code
+      const clientCodeToUse = selectedPartyClientCode || clientCodeFromFile || '';
+      console.log('Using Client Code:', clientCodeToUse);
+      
+      // Parse the data starting from the header row
+      const data = XLSX.utils.sheet_to_json(sheet, { raw: false, range: headerRowIndex });
+      
+      console.log('Parsed data rows:', data.length);
+      console.log('First few parsed rows:', data.slice(0, 3));
       
       const newLedgerEntries = [];
       let addedCount = 0;
@@ -2355,11 +2478,14 @@ Phone: ${companyConfig.phone}`;
         return parseFloat(str) || 0;
       };
       
-      // Parse date
+      // Parse date - handle multiple formats
       const parseDate = (dateStr) => {
-        if (!dateStr || typeof dateStr !== 'string') return '';
-        const trimmed = dateStr.trim();
-        const parts = trimmed.split(/[-\/]/);
+        if (!dateStr) return '';
+        const str = String(dateStr).trim();
+        if (!str) return '';
+        
+        // Try different formats
+        const parts = str.split(/[-\/]/);
         if (parts.length === 3) {
           const months = { 'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06', 
                          'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12' };
@@ -2369,30 +2495,36 @@ Phone: ${companyConfig.phone}`;
             const year = parts[2].length === 2 ? (parseInt(parts[2]) > 50 ? '19' + parts[2] : '20' + parts[2]) : parts[2];
             return `${year}-${months[monthKey]}-${day}`;
           }
+          // Try DD-MM-YYYY or DD/MM/YYYY format
+          if (parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length === 4) {
+            return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          }
         }
-        return trimmed;
+        return str;
       };
       
       data.forEach((row, index) => {
+        // Get values with multiple possible column names
         const dateValue = parseDate(row['Date'] || row['DATE'] || row['date'] || '');
         const particular = (row['Particular'] || row['PARTICULAR'] || row['Particulars'] || row['PARTICULARS'] || '').trim();
         const vchType = (row['Vch Type'] || row['VCH TYPE'] || row['Voucher Type'] || row['vch type'] || '').trim();
         const vchNo = (row['Vch No.'] || row['VCH NO.'] || row['Voucher No'] || row['Invoice No'] || row['Vch No'] || row['vch no.'] || '').trim();
         const debit = parseNumber(row['Debit'] || row['DEBIT'] || row['debit']);
         const credit = parseNumber(row['Credit'] || row['CREDIT'] || row['credit']);
-        const receiptDate = row['Date of Receipt'] || row['DATE OF RECEIPT'] || row['Receipt Date'] || '';
+        const receiptDate = String(row['Date of Receipt'] || row['DATE OF RECEIPT'] || row['Receipt Date'] || '').trim();
         const amountReceived = parseNumber(row['Amount Received'] || row['AMOUNT RECEIVED'] || row['amount received']);
         const tdsReceived = parseNumber(row['TDS amount Received'] || row['TDS Received'] || row['TDS'] || row['tds']);
         const balance = parseNumber(row['Balance'] || row['BALANCE'] || row['balance']);
         const paymentStatus = (row['Payment Status'] || row['PAYMENT STATUS'] || row['Status'] || row['status'] || '').trim();
         
         // Check if this is a sub-row (no date, contains line item details)
-        const isSubRow = !dateValue && (
+        const isSubRow = !dateValue && particular && (
           particular.toUpperCase().includes('PROMOTIONAL') || 
           particular.toUpperCase().includes('IGST') || 
           particular.toUpperCase().includes('CGST') || 
           particular.toUpperCase().includes('SGST') ||
-          particular.toUpperCase().includes('TRADE EMAILER')
+          particular.toUpperCase().includes('TRADE EMAILER') ||
+          (credit > 0 || debit > 0)  // Sub-row with amount but no date
         );
         
         if (isSubRow && currentMainEntry) {
@@ -2406,8 +2538,7 @@ Phone: ${companyConfig.phone}`;
             credit: credit
           });
         } else if (dateValue && (vchNo || debit > 0 || credit > 0)) {
-          // This is a main entry
-          // Save previous main entry if exists
+          // This is a main entry - save previous one first
           if (currentMainEntry) {
             newLedgerEntries.push(currentMainEntry);
             addedCount++;
@@ -2426,6 +2557,7 @@ Phone: ${companyConfig.phone}`;
           currentMainEntry = {
             id: Date.now() + index,
             partyName: selectedParty,
+            clientCode: clientCodeToUse,
             date: dateValue,
             particulars: particular || selectedParty,
             narration: vchNo,
@@ -2451,13 +2583,14 @@ Phone: ${companyConfig.phone}`;
         addedCount++;
       }
       
-      console.log('Parsed entries with sub-rows:', newLedgerEntries);
+      console.log('Final parsed entries:', newLedgerEntries);
       
       if (addedCount > 0) {
         setLedgerEntries(prev => [...prev, ...newLedgerEntries]);
-        alert(`✅ Historical Ledger Uploaded!\n\n${addedCount} entries added for "${selectedParty}".`);
+        const codeMsg = clientCodeToUse ? ` (Code: ${clientCodeToUse})` : '';
+        alert(`✅ Historical Ledger Uploaded!\n\n${addedCount} entries added for "${selectedParty}"${codeMsg}.`);
       } else {
-        alert(`⚠️ No valid ledger entries found in the file.\n\nMake sure your file has these columns:\n• Date (e.g., 02-Jun-21)\n• Vch Type (e.g., Sales, Credit Note)\n• Vch No. (e.g., MB/2022-23/128)\n• Debit or Credit amount`);
+        alert(`⚠️ No valid ledger entries found in the file.\n\nMake sure your file has these columns:\n• Date (e.g., 02-Jun-21)\n• Vch Type (e.g., Sales, Credit Note)\n• Vch No. (e.g., MB/2022-23/128)\n• Debit or Credit amount\n\nCheck browser console (F12) for details.`);
       }
     };
     reader.readAsBinaryString(file);
@@ -2467,13 +2600,42 @@ Phone: ${companyConfig.phone}`;
 
   // Download Historical Ledger Template
   const downloadHistoricalLedgerTemplate = () => {
-    const ws = XLSX.utils.json_to_sheet([
-      { 'Date': '02-Jun-21', 'Particular': 'ABC Corp Ltd.', 'Vch Type': 'Sales', 'Vch No.': 'MB/2020-21/0411', 'Debit': 6000, 'Credit': '', 'Date of Receipt': '', 'Amount Received': 44371, 'TDS amount Received': 5880, 'Balance': '', 'Payment Status': 'Received' },
-      { 'Date': '', 'Particular': 'PROMOTIONAL TRADE EMAILERS', 'Vch Type': '', 'Vch No.': '', 'Debit': '', 'Credit': 22500, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
-      { 'Date': '', 'Particular': 'IGST', 'Vch Type': '', 'Vch No.': '', 'Debit': '', 'Credit': 4050, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
-      { 'Date': '26-Mar-25', 'Particular': 'ABC Corp Ltd.', 'Vch Type': 'Credit Note', 'Vch No.': 'CN/2022-23/128', 'Debit': '', 'Credit': 26550, 'Date of Receipt': '', 'Amount Received': '', 'TDS amount Received': '', 'Balance': '', 'Payment Status': '' },
-    ]);
     const wb = XLSX.utils.book_new();
+    
+    // Create the data with Client Name and Code at top
+    const data = [
+      ['Client Name', selectedParty || 'ABC Corp Ltd.'],
+      ['Code', selectedPartyClientCode || '2.01'],
+      [],  // Empty row
+      ['Date', 'Particular', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Date of Receipt', 'Amount Received', 'TDS amount Received', 'Balance', 'Payment Status'],
+      ['02-Jun-21', 'ABC Corp Ltd.', 'Sales', 'MB/2020-21/0411', 6000, '', '24-06-2021', 5880, 120, 0, 'Received'],
+      ['', 'PROMOTIONAL TRADE EMAILERS', '', '', '', 6000, '', '', '', '', ''],
+      ['', 'IGST', '', '', '', 0, '', '', '', '', ''],
+      ['31-Oct-22', 'ABC Corp Ltd.', 'Sales', 'MB/2022-23/128', 26550, '', '', '', '', '', ''],
+      ['', 'PROMOTIONAL TRADE EMAILERS', '', '', '', 22500, '', '', '', '', ''],
+      ['', 'IGST', '', '', '', 4050, '', '', '', '', ''],
+      ['26-Mar-25', 'ABC Corp Ltd.', 'Credit Note', 'CN/2022-23/128', '', 26550, '', '', '', '', ''],
+      ['', 'PROMOTIONAL TRADE EMAILERS', '', '', '', -22500, '', '', '', '', ''],
+      ['', 'IGST', '', '', '', -4050, '', '', '', '', ''],
+    ];
+    
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 12 }, // Date
+      { wch: 30 }, // Particular
+      { wch: 12 }, // Vch Type
+      { wch: 18 }, // Vch No.
+      { wch: 10 }, // Debit
+      { wch: 10 }, // Credit
+      { wch: 15 }, // Date of Receipt
+      { wch: 15 }, // Amount Received
+      { wch: 18 }, // TDS amount Received
+      { wch: 10 }, // Balance
+      { wch: 15 }, // Payment Status
+    ];
+    
     XLSX.utils.book_append_sheet(wb, ws, 'Historical Ledger');
     XLSX.writeFile(wb, 'Historical_Ledger_Template.xlsx');
   };
@@ -3337,7 +3499,7 @@ ${generateInvoiceHtml(row)}
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
           </button>
-          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix20</div>}
+          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix21</div>}
         </div>
       </div>
     );
@@ -3957,13 +4119,48 @@ ${generateInvoiceHtml(row)}
   // Delete service row
   const deleteServiceRow = (id) => {
     const row = servicesData.find(r => r.id === id);
-    if (row?.invoiceGenerated && row?.invoiceStatus === 'Approved') {
-      alert('Cannot delete approved invoices. Delete from Invoice Register instead.');
-      return;
+    if (!row) return;
+    
+    // Check if there are receipts or credit notes linked to this invoice
+    if (row.invoiceNo) {
+      const linkedReceipts = receipts.filter(r => r.invoiceNo === row.invoiceNo);
+      const linkedCNs = creditNotes.filter(cn => cn.invoiceNo === row.invoiceNo);
+      
+      if (linkedReceipts.length > 0 || linkedCNs.length > 0) {
+        const msg = [];
+        if (linkedReceipts.length > 0) msg.push(`${linkedReceipts.length} receipt(s)`);
+        if (linkedCNs.length > 0) msg.push(`${linkedCNs.length} credit note(s)`);
+        
+        if (!window.confirm(`This invoice has ${msg.join(' and ')} linked.\n\nDeleting will also remove these. Continue?`)) {
+          return;
+        }
+        
+        // Delete linked receipts and credit notes
+        setReceipts(prev => prev.filter(r => r.invoiceNo !== row.invoiceNo));
+        setCreditNotes(prev => prev.filter(cn => cn.invoiceNo !== row.invoiceNo));
+      } else {
+        if (!window.confirm('Delete this service entry and its invoice?')) {
+          return;
+        }
+      }
+      
+      // Extract invoice number for reuse
+      const invoiceNoMatch = row.invoiceNo.match(/(\d+)$/);
+      if (invoiceNoMatch) {
+        const deletedNum = parseInt(invoiceNoMatch[1]);
+        // If this was the last invoice, decrement the counter
+        if (deletedNum === nextInvoiceNo - 1) {
+          setNextInvoiceNo(prev => prev - 1);
+        }
+      }
+    } else {
+      if (!window.confirm('Delete this service entry?')) {
+        return;
+      }
     }
-    if (window.confirm('Delete this service entry?')) {
-      setServicesData(prev => prev.filter(r => r.id !== id));
-    }
+    
+    setServicesData(prev => prev.filter(r => r.id !== id));
+    alert('✅ Service entry deleted successfully.');
   };
   
   // Generate service invoice (same as master sheet)
@@ -4769,13 +4966,19 @@ ${generateInvoiceHtml(row)}
       const partyReceipts = safeReceipts.filter(r => matchParty(r.partyName, party) && (!partyState || invoiceNos.has(r.invoiceNo)));
       const partyCNs = safeCreditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyState || invoiceNos.has(cn.invoiceNo)));
       
-      // Historical entries
-      const historicalInvoices = !partyState ? safeLedgerEntries.filter(e => 
-        matchParty(e.partyName, party) && e.isHistorical && !e.vchNo?.toUpperCase().startsWith('CN')
-      ) : [];
-      const historicalCNs = !partyState ? safeLedgerEntries.filter(e => 
-        matchParty(e.partyName, party) && e.isHistorical && e.vchNo?.toUpperCase().startsWith('CN')
-      ) : [];
+      // Historical entries - filter by Client Code
+      const historicalInvoices = safeLedgerEntries.filter(e => 
+        matchParty(e.partyName, party) && 
+        e.isHistorical && 
+        !e.vchNo?.toUpperCase().startsWith('CN') &&
+        (!partyClientCode || e.clientCode === partyClientCode || !e.clientCode)
+      );
+      const historicalCNs = safeLedgerEntries.filter(e => 
+        matchParty(e.partyName, party) && 
+        e.isHistorical && 
+        e.vchNo?.toUpperCase().startsWith('CN') &&
+        (!partyClientCode || e.clientCode === partyClientCode || !e.clientCode)
+      );
       
       // CN map for matching
       const cnByYearSuffix = new Map();
@@ -5688,14 +5891,21 @@ ${generateInvoiceHtml(row)}
     
     const stateInvoiceNos = new Set(Array.from(invoiceMap.keys()));
     
-    // Historical entries - only show if no state filter
-    const historicalInvoices = !selectedPartyState ? ledgerEntries.filter(e => 
-      matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-    ) : [];
+    // Historical entries - filter by Client Code (historical entries now include clientCode)
+    const historicalInvoices = ledgerEntries.filter(e => 
+      matchParty(e.partyName, selectedParty) && 
+      e.isHistorical && 
+      e.type !== 'creditnote' && 
+      !e.vchNo?.toUpperCase().startsWith('CN') &&
+      (!selectedPartyClientCode || e.clientCode === selectedPartyClientCode || !e.clientCode)
+    );
     
-    const historicalCNs = !selectedPartyState ? ledgerEntries.filter(e => 
-      matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-    ) : [];
+    const historicalCNs = ledgerEntries.filter(e => 
+      matchParty(e.partyName, selectedParty) && 
+      e.isHistorical && 
+      (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN')) &&
+      (!selectedPartyClientCode || e.clientCode === selectedPartyClientCode || !e.clientCode)
+    );
     
     const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(r.invoiceNo)));
     const systemCNs = creditNotes.filter(cn => matchParty(cn.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(cn.invoiceNo)));
@@ -6696,14 +6906,23 @@ ${generateInvoiceHtml(row)}
       // Collect invoice numbers for this state's ledger (to filter receipts/CNs)
       const stateInvoiceNos = new Set(Array.from(invoiceMap.keys()));
       
-      // Historical entries - only show if no state filter (historical data doesn't have state)
-      const historicalInvoices = !selectedPartyState ? ledgerEntries.filter(e => 
-        matchParty(e.partyName, selectedParty) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-      ) : [];
+      // Historical entries - filter by Client Code as well (historical data now includes clientCode)
+      const historicalInvoices = ledgerEntries.filter(e => 
+        matchParty(e.partyName, selectedParty) && 
+        e.isHistorical && 
+        e.type !== 'creditnote' && 
+        !e.vchNo?.toUpperCase().startsWith('CN') &&
+        // Check Client Code match
+        (!selectedPartyClientCode || e.clientCode === selectedPartyClientCode || !e.clientCode)
+      );
       
-      const historicalCNs = !selectedPartyState ? ledgerEntries.filter(e => 
-        matchParty(e.partyName, selectedParty) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-      ) : [];
+      const historicalCNs = ledgerEntries.filter(e => 
+        matchParty(e.partyName, selectedParty) && 
+        e.isHistorical && 
+        (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN')) &&
+        // Check Client Code match
+        (!selectedPartyClientCode || e.clientCode === selectedPartyClientCode || !e.clientCode)
+      );
       
       // Receipts/CNs - filter by invoice number when state is selected
       const partyReceipts = receipts.filter(r => matchParty(r.partyName, selectedParty) && (!selectedPartyState || stateInvoiceNos.has(r.invoiceNo)));
