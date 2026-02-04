@@ -3499,7 +3499,7 @@ ${generateInvoiceHtml(row)}
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
           </button>
-          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix21</div>}
+          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix22</div>}
         </div>
       </div>
     );
@@ -4121,30 +4121,34 @@ ${generateInvoiceHtml(row)}
     const row = servicesData.find(r => r.id === id);
     if (!row) return;
     
-    // Check if there are receipts or credit notes linked to this invoice
+    // If invoice has been generated, only reset invoice fields (don't delete entire row)
     if (row.invoiceNo) {
+      // Check if there are receipts or credit notes linked to this invoice
       const linkedReceipts = receipts.filter(r => r.invoiceNo === row.invoiceNo);
       const linkedCNs = creditNotes.filter(cn => cn.invoiceNo === row.invoiceNo);
       
+      let confirmMsg = 'Delete this invoice? The service entry will remain but invoice data will be cleared.';
+      
       if (linkedReceipts.length > 0 || linkedCNs.length > 0) {
-        const msg = [];
-        if (linkedReceipts.length > 0) msg.push(`${linkedReceipts.length} receipt(s)`);
-        if (linkedCNs.length > 0) msg.push(`${linkedCNs.length} credit note(s)`);
-        
-        if (!window.confirm(`This invoice has ${msg.join(' and ')} linked.\n\nDeleting will also remove these. Continue?`)) {
-          return;
-        }
-        
-        // Delete linked receipts and credit notes
-        setReceipts(prev => prev.filter(r => r.invoiceNo !== row.invoiceNo));
-        setCreditNotes(prev => prev.filter(cn => cn.invoiceNo !== row.invoiceNo));
-      } else {
-        if (!window.confirm('Delete this service entry and its invoice?')) {
-          return;
-        }
+        const items = [];
+        if (linkedReceipts.length > 0) items.push(`${linkedReceipts.length} receipt(s)`);
+        if (linkedCNs.length > 0) items.push(`${linkedCNs.length} credit note(s)`);
+        confirmMsg = `This invoice has ${items.join(' and ')} linked.\n\nDeleting will also remove these. Continue?`;
       }
       
-      // Extract invoice number for reuse
+      if (!window.confirm(confirmMsg)) {
+        return;
+      }
+      
+      // Delete linked receipts and credit notes
+      if (linkedReceipts.length > 0) {
+        setReceipts(prev => prev.filter(r => r.invoiceNo !== row.invoiceNo));
+      }
+      if (linkedCNs.length > 0) {
+        setCreditNotes(prev => prev.filter(cn => cn.invoiceNo !== row.invoiceNo));
+      }
+      
+      // Extract invoice number for potential reuse
       const invoiceNoMatch = row.invoiceNo.match(/(\d+)$/);
       if (invoiceNoMatch) {
         const deletedNum = parseInt(invoiceNoMatch[1]);
@@ -4153,14 +4157,40 @@ ${generateInvoiceHtml(row)}
           setNextInvoiceNo(prev => prev - 1);
         }
       }
+      
+      // Reset invoice fields (same as Master Sheet handleDeleteInvoice)
+      setServicesData(prev => prev.map(r => 
+        r.id === id ? {
+          ...r,
+          invoiceNo: '',
+          invoiceDate: '',
+          invoiceTotalAmount: '',
+          cgst: '',
+          sgst: '',
+          igst: '',
+          totalWithGst: '',
+          invoiceGenerated: false,
+          invoiceStatus: 'Pending',
+          mailingSent: 'No',
+          mailDate: '',
+          directorRemarks: '',
+          receiptStatus: '',
+          receiptNo: '',
+          receiptDate: ''
+        } : r
+      ));
+      
+      const receiptMsg = linkedReceipts.length > 0 ? `\n${linkedReceipts.length} receipt(s) also deleted.` : '';
+      const cnMsg = linkedCNs.length > 0 ? `\n${linkedCNs.length} credit note(s) also deleted.` : '';
+      alert(`✅ Invoice deleted.${receiptMsg}${cnMsg}\n\nYou can now regenerate the invoice.`);
     } else {
+      // No invoice generated - can delete entire row
       if (!window.confirm('Delete this service entry?')) {
         return;
       }
+      setServicesData(prev => prev.filter(r => r.id !== id));
+      alert('✅ Service entry deleted.');
     }
-    
-    setServicesData(prev => prev.filter(r => r.id !== id));
-    alert('✅ Service entry deleted successfully.');
   };
   
   // Generate service invoice (same as master sheet)
@@ -6653,15 +6683,22 @@ ${generateInvoiceHtml(row)}
       const partyReceipts = receipts.filter(r => matchParty(r.partyName, party) && (!partyNormalizedState || invoiceNos.has(r.invoiceNo)));
       const partyCreditNotes = creditNotes.filter(cn => matchParty(cn.partyName, party) && (!partyNormalizedState || invoiceNos.has(cn.invoiceNo)));
       
-      // Historical invoices (case-insensitive) - historical entries don't have state, include only if no state filter or no Party Master entries
-      const historicalInvoices = !partyNormalizedState ? ledgerEntries.filter(e => 
-        matchParty(e.partyName, party) && e.isHistorical && e.type !== 'creditnote' && !e.vchNo?.toUpperCase().startsWith('CN')
-      ) : [];
+      // Historical invoices - filter by Client Code (not by state)
+      const historicalInvoices = ledgerEntries.filter(e => 
+        matchParty(e.partyName, party) && 
+        e.isHistorical && 
+        e.type !== 'creditnote' && 
+        !e.vchNo?.toUpperCase().startsWith('CN') &&
+        (!partyClientCode || e.clientCode === partyClientCode || !e.clientCode)
+      );
       
       // Historical CNs
-      const historicalCNs = !partyNormalizedState ? ledgerEntries.filter(e => 
-        matchParty(e.partyName, party) && e.isHistorical && (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN'))
-      ) : [];
+      const historicalCNs = ledgerEntries.filter(e => 
+        matchParty(e.partyName, party) && 
+        e.isHistorical && 
+        (e.type === 'creditnote' || e.vchNo?.toUpperCase().startsWith('CN')) &&
+        (!partyClientCode || e.clientCode === partyClientCode || !e.clientCode)
+      );
       
       // Helper to extract year+suffix for matching (e.g., "2022-23/272" from "MB/2022-23/272")
       const getInvoiceYearSuffix = (vchNo) => {
