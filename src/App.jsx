@@ -404,7 +404,8 @@ export default function FinanceApp() {
   const [nextCombineNo, setNextCombineNo] = useState(1);
   const [nextReceiptNo, setNextReceiptNo] = useState(1);
   const [nextCreditNoteNo, setNextCreditNoteNo] = useState(1);
-  const [nextServiceInvoiceNo, setNextServiceInvoiceNo] = useState(1); // For services invoices
+  // nextServiceInvoiceNo is deprecated - now using shared nextInvoiceNo for both Master & Services
+  const [nextServiceInvoiceNo, setNextServiceInvoiceNo] = useState(1); // Kept for backward compatibility
   
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -763,7 +764,15 @@ export default function FinanceApp() {
         if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
         if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
         if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
-        if (data.nextServiceInvoiceNo) setNextServiceInvoiceNo(data.nextServiceInvoiceNo);
+        // Migration: If nextServiceInvoiceNo exists and is higher, use it as the unified counter
+        if (data.nextServiceInvoiceNo) {
+          setNextServiceInvoiceNo(data.nextServiceInvoiceNo);
+          // Use the higher of the two counters to prevent duplicate invoice numbers
+          if (data.nextServiceInvoiceNo > (data.nextInvoiceNo || 1)) {
+            setNextInvoiceNo(data.nextServiceInvoiceNo);
+            console.log('Migrated invoice counter to:', data.nextServiceInvoiceNo);
+          }
+        }
         if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
         if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
         console.log('Data loaded from Firebase');
@@ -1118,7 +1127,13 @@ export default function FinanceApp() {
       if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
       if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
       if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
-      if (data.nextServiceInvoiceNo) setNextServiceInvoiceNo(data.nextServiceInvoiceNo);
+      // Migration: If nextServiceInvoiceNo exists and is higher, use it as the unified counter
+      if (data.nextServiceInvoiceNo) {
+        setNextServiceInvoiceNo(data.nextServiceInvoiceNo);
+        if (data.nextServiceInvoiceNo > (data.nextInvoiceNo || 1)) {
+          setNextInvoiceNo(data.nextServiceInvoiceNo);
+        }
+      }
       if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
       if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
       
@@ -3322,7 +3337,7 @@ ${generateInvoiceHtml(row)}
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
           </button>
-          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix19</div>}
+          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix20</div>}
         </div>
       </div>
     );
@@ -3961,7 +3976,7 @@ ${generateInvoiceHtml(row)}
       return;
     }
     
-    const invoiceNo = `${companyConfig.invoicePrefix}${nextServiceInvoiceNo}`;
+    const invoiceNo = `${companyConfig.invoicePrefix}${nextInvoiceNo}`;
     const invoiceDate = new Date().toISOString().split('T')[0];
     
     const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
@@ -3987,7 +4002,8 @@ ${generateInvoiceHtml(row)}
       } : r
     ));
     
-    setNextServiceInvoiceNo(prev => prev + 1);
+    // Use shared invoice counter - same as Master Sheet
+    setNextInvoiceNo(prev => prev + 1);
     
     addNotification('invoice_created', `Service Invoice ${invoiceNo} created for ${row.partyName}`, 'director');
   };
