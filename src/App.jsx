@@ -708,6 +708,15 @@ export default function FinanceApp() {
   const saveDataToFirebase = useCallback(async () => {
     setIsSaving(true);
     try {
+      // Debug: Log what we're saving
+      console.log('Saving to Firebase:', {
+        masterDataCount: masterData?.length,
+        servicesDataCount: servicesData?.length,
+        servicesDataSample: servicesData?.slice(0, 1),
+        receiptsCount: receipts?.length,
+        creditNotesCount: creditNotes?.length
+      });
+      
       await saveAppState('indreesh-media', {
         masterData,
         servicesData,
@@ -731,7 +740,7 @@ export default function FinanceApp() {
         userPasswords
       });
       setLastSaved(new Date());
-      console.log('Data saved to Firebase');
+      console.log('Data saved to Firebase successfully');
     } catch (error) {
       console.error('Error saving data:', error);
     }
@@ -998,6 +1007,15 @@ export default function FinanceApp() {
     // Set up real-time listener
     unsubscribeRef.current = subscribeToAppState('indreesh-media', (data) => {
       if (!data) return;
+      
+      // Debug: Log what data we're receiving from Firebase
+      console.log('Firebase data received:', {
+        hasMasterData: Array.isArray(data.masterData) ? data.masterData.length : 'not array',
+        hasServicesData: Array.isArray(data.servicesData) ? data.servicesData.length : 'not array',
+        servicesDataRaw: data.servicesData,
+        hasReceipts: Array.isArray(data.receipts) ? data.receipts.length : 'not array',
+        hasCreditNotes: Array.isArray(data.creditNotes) ? data.creditNotes.length : 'not array'
+      });
       
       // Mark that we're receiving an update to avoid save loop
       isReceivingUpdateRef.current = true;
@@ -3505,13 +3523,23 @@ ${generateInvoiceHtml(row)}
       }).filter(row => row !== null);
       
       if (processedData.length > 0) {
-        setServicesData(prev => [...prev, ...processedData]);
+        setServicesData(prev => {
+          const newData = [...prev, ...processedData];
+          console.log('Services data updated:', newData.length, 'entries');
+          return newData;
+        });
         const newParties = [...new Set(processedData.map(r => r.partyName))];
         setExpandedServiceParties(prev => {
           const newSet = new Set(prev);
           newParties.forEach(p => newSet.add(p));
           return newSet;
         });
+        
+        // Force immediate save to Firebase
+        setTimeout(() => {
+          console.log('Triggering immediate save for services data...');
+          saveDataToFirebase();
+        }, 500);
       }
       
       let message = `✅ Services Upload Complete!\n\n`;
@@ -3725,13 +3753,16 @@ ${generateInvoiceHtml(row)}
     const canEdit = userRole === 'finance';
     
     // Debug: Log services data with more detail
-    console.log('Services Debug:', {
+    console.log('Services Render Debug:', {
+      servicesDataType: typeof servicesData,
+      servicesDataIsArray: Array.isArray(servicesData),
+      servicesDataLength: servicesData?.length,
       safeServicesDataLength: safeServicesData.length,
       filteredServicesDataLength: filteredServicesData.length,
       role: userRole,
       serviceFilters,
       servicesSheetTab,
-      sample: safeServicesData.slice(0, 2)
+      rawServicesData: servicesData
     });
     
     const openServices = filteredServicesData.filter(r => !r.invoiceGenerated || r.invoiceStatus !== 'Approved');
@@ -4191,7 +4222,7 @@ ${generateInvoiceHtml(row)}
     XLSX.writeFile(wb, `${partyName.substring(0, 20)}_Ledger_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export All Party Ledgers - EXACT match to print format
+  // Export All Party Ledgers - EXACT match to UI view with all columns and sub-rows
   const exportAllLedgersToExcel = () => {
     const wb = XLSX.utils.book_new();
     let sheetsAdded = 0;
@@ -4254,8 +4285,8 @@ ${generateInvoiceHtml(row)}
         if (key && !cnByYearSuffix.has(key)) cnByYearSuffix.set(key, cn);
       });
       
-      // Build rows using arrays - EXACT column order as print
-      // Columns: Date, Particular, Vch Type, Vch No., Debit, Credit, Amt Received, TDS, Balance
+      // Build rows - EXACT columns as UI view:
+      // Date | Particular | Vch Type | Vch No. | Debit | Credit | Date of Receipt | Amount Received | TDS Received | Balance | Payment Status
       const rows = [];
       let runningBalance = opening;
       let totalDebit = 0, totalCredit = 0, totalReceived = 0, totalTds = 0;
@@ -4269,12 +4300,12 @@ ${generateInvoiceHtml(row)}
       if (partyInfo.gstin) rows.push(['GSTIN: ' + partyInfo.gstin]);
       rows.push([]);
       
-      // Column headers - EXACT as your screenshot
-      rows.push(['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Amt Received', 'TDS', 'Balance']);
+      // Column headers - EXACT as UI view
+      rows.push(['Date', 'Particular', 'Vch Type', 'Vch No.', 'Debit', 'Credit', 'Date of Receipt', 'Amount Received', 'TDS Received', 'Balance', 'Payment Status']);
       
       // Opening balance
       if (opening !== 0) {
-        rows.push(['', 'Opening Balance', '', '', opening > 0 ? opening : '', opening < 0 ? Math.abs(opening) : '', '', '', opening]);
+        rows.push(['', 'Opening Balance', '', '', opening > 0 ? opening : '', opening < 0 ? Math.abs(opening) : '', '', '', '', opening, '']);
         if (opening > 0) totalDebit += opening; else totalCredit += Math.abs(opening);
       }
       
@@ -4304,12 +4335,23 @@ ${generateInvoiceHtml(row)}
           const invReceipts = partyReceipts.filter(r => r.invoiceNo === inv.invoiceNo);
           const received = invReceipts.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
           const tds = invReceipts.reduce((sum, r) => sum + (parseFloat(r.tds || r.tdsAmount) || 0), 0);
+          const receiptDate = invReceipts.length > 0 ? formatDate(invReceipts[0].date) : '';
           
           // Check for CN
           const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
           const matchingCN = cnByYearSuffix.get(invYearSuffix);
           const cnAmount = matchingCN ? Math.abs(parseFloat(matchingCN.totalAmount || matchingCN.credit) || 0) : 0;
           const hasCN = !!matchingCN;
+          
+          // Calculate balance and status
+          let paymentStatus = 'Pending';
+          let balanceAmount = totalAmount - received - tds;
+          if (hasCN && cnAmount >= totalAmount) {
+            paymentStatus = 'CN Closed';
+            balanceAmount = 0;
+          } else if (received > 0 || tds > 0) {
+            paymentStatus = 'Received';
+          }
           
           runningBalance += totalAmount;
           totalDebit += totalAmount;
@@ -4322,12 +4364,25 @@ ${generateInvoiceHtml(row)}
             inv.invoiceNo,
             totalAmount,
             '',
+            receiptDate,
             received || '',
             tds || '',
-            runningBalance
+            hasCN ? '-' : balanceAmount,
+            paymentStatus
           ]);
           
-          // Deduct receipt from balance
+          // Sub-row: PROMOTIONAL TRADE EMAILER
+          rows.push(['', '    PROMOTIONAL TRADE EMAILER' + (inv.campaigns.length > 1 ? 'S' : ''), '', '', '', baseAmount, '', '', '', '', '']);
+          
+          // Sub-row: GST breakdown
+          if (isSameState) {
+            rows.push(['', '    CGST', '', '', '', cgst, '', '', '', '', '']);
+            rows.push(['', '    SGST', '', '', '', sgst, '', '', '', '', '']);
+          } else {
+            rows.push(['', '    IGST', '', '', '', igst, '', '', '', '', '']);
+          }
+          
+          // Deduct receipt from running balance
           if (received > 0 || tds > 0) {
             runningBalance -= (received + tds);
             totalReceived += received;
@@ -4340,24 +4395,37 @@ ${generateInvoiceHtml(row)}
             runningBalance -= cnAmount;
             totalCredit += cnAmount;
             
-            // CN row
+            // CN main row
             rows.push([
               formatDate(matchingCN.date),
-              'Credit Note',
+              party,
               'Credit Note',
               matchingCN.creditNoteNo || matchingCN.vchNo,
               '',
               cnAmount,
               '',
               '',
-              runningBalance
+              '',
+              '-',
+              ''
             ]);
+            
+            // CN sub-rows
+            const cnBase = cnAmount / 1.18;
+            const cnTax = cnAmount - cnBase;
+            rows.push(['', '    PROMOTIONAL TRADE EMAILER', '', '', '', cnBase, '', '', '', '', '']);
+            if (isSameState) {
+              rows.push(['', '    CGST/SGST', '', '', '', cnTax, '', '', '', '', '']);
+            } else {
+              rows.push(['', '    IGST', '', '', '', cnTax, '', '', '', '', '']);
+            }
           }
         } else if (entry.entryType === 'historical') {
           const e = entry;
           const debit = parseFloat(e.debit) || 0;
           const invYearSuffix = getInvoiceYearSuffix(e.vchNo);
           const matchingCN = cnByYearSuffix.get(invYearSuffix);
+          const hasCN = !!matchingCN;
           
           runningBalance += debit;
           totalDebit += debit;
@@ -4369,9 +4437,11 @@ ${generateInvoiceHtml(row)}
             e.vchNo || '',
             debit,
             '',
-            '',
-            '',
-            runningBalance
+            e.receiptDate ? formatDate(e.receiptDate) : '',
+            e.amountReceived || '',
+            e.tdsReceived || '',
+            hasCN ? '-' : runningBalance,
+            hasCN ? 'CN Closed' : (e.paymentStatus || '')
           ]);
           
           // Add CN right after if exists
@@ -4383,14 +4453,16 @@ ${generateInvoiceHtml(row)}
             
             rows.push([
               formatDate(matchingCN.date),
-              'Credit Note',
+              party,
               'Credit Note',
               matchingCN.creditNoteNo || matchingCN.vchNo,
               '',
               cnAmount,
               '',
               '',
-              runningBalance
+              '',
+              '-',
+              ''
             ]);
           }
         }
@@ -4401,8 +4473,8 @@ ${generateInvoiceHtml(row)}
       
       // Totals
       rows.push([]);
-      rows.push(['', 'TOTAL', '', '', totalDebit, totalCredit, totalReceived, totalTds, '']);
-      rows.push(['', 'Closing Balance', '', '', runningBalance > 0 ? runningBalance : '', runningBalance < 0 ? Math.abs(runningBalance) : '', '', '', runningBalance]);
+      rows.push(['', 'TOTAL', '', '', totalDebit, totalCredit, '', totalReceived, totalTds, '', '']);
+      rows.push(['', 'Closing Balance', '', '', runningBalance > 0 ? runningBalance : '', runningBalance < 0 ? Math.abs(runningBalance) : '', '', '', '', runningBalance, '']);
       
       // Create sheet with array of arrays
       let sheetName = party.substring(0, 25).replace(/[\\\/\*\?\[\]:]/g, '');
@@ -4420,38 +4492,75 @@ ${generateInvoiceHtml(row)}
     XLSX.writeFile(wb, `All_Ledgers_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
-  // Export Receipt Register - includes CNs
+  // Export Receipt Register - includes CNs with proper columns
   const exportReceiptRegisterToExcel = () => {
-    const receiptData = safeReceipts.map(r => ({
-      'Type': 'Receipt',
-      'Voucher No': r.receiptNo,
-      'Date': formatDate(r.date),
-      'Party Name': r.partyName,
-      'Against Invoice': r.invoiceNo,
-      'Amount': parseFloat(r.amount) || 0,
-      'TDS': parseFloat(r.tds || r.tdsAmount) || 0,
-      'Total': (parseFloat(r.amount) || 0) + (parseFloat(r.tds || r.tdsAmount) || 0),
-      'Payment Mode': r.paymentMode || 'Bank Transfer',
-      'Narration': r.narration || ''
-    }));
+    // Helper to get CN base and GST
+    const getCNAmounts = (cn) => {
+      const total = parseFloat(cn.totalAmount) || 0;
+      let base = parseFloat(cn.baseAmount) || parseFloat(cn.amount) || 0;
+      let gst = parseFloat(cn.gst) || (parseFloat(cn.cgstAmount) || 0) + (parseFloat(cn.sgstAmount) || 0) + (parseFloat(cn.igstAmount) || 0);
+      if (base === 0 && total > 0) {
+        base = total / 1.18;
+        gst = total - base;
+      }
+      return { base, gst, total };
+    };
     
-    const cnData = safeCreditNotes.map(cn => ({
-      'Type': 'Credit Note',
-      'Voucher No': cn.creditNoteNo,
-      'Date': formatDate(cn.date),
-      'Party Name': cn.partyName,
-      'Against Invoice': cn.invoiceNo,
-      'Amount': parseFloat(cn.totalAmount) || 0,
-      'TDS': '',
-      'Total': parseFloat(cn.totalAmount) || 0,
-      'Payment Mode': '',
-      'Narration': cn.reason || ''
-    }));
+    const receiptData = safeReceipts.map(r => {
+      const amount = parseFloat(r.amount) || 0;
+      const tds = parseFloat(r.tds) || parseFloat(r.tdsAmount) || 0;
+      return {
+        'Type': 'Receipt',
+        'Voucher No': r.receiptNo,
+        'Date': formatDate(r.date),
+        'Party Name': r.partyName,
+        'Against Invoice': r.invoiceNo,
+        'Amount': amount,
+        'TDS': tds,
+        'Total': amount + tds,
+        'Payment Mode': r.paymentMode || r.mode || 'Bank Transfer',
+        'Narration': r.narration || ''
+      };
+    });
     
-    const exportData = [...receiptData, ...cnData];
-    const ws = XLSX.utils.json_to_sheet(exportData);
+    const cnData = safeCreditNotes.map(cn => {
+      const cnAmounts = getCNAmounts(cn);
+      return {
+        'Type': 'Credit Note',
+        'Voucher No': cn.creditNoteNo,
+        'Date': formatDate(cn.date),
+        'Party Name': cn.partyName,
+        'Against Invoice': cn.invoiceNo,
+        'Base Amount': cnAmounts.base,
+        'GST': cnAmounts.gst,
+        'Total': cnAmounts.total,
+        'Reason': cn.reason || ''
+      };
+    });
+    
+    // Create workbook with 2 sheets
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Receipt & CN Register');
+    
+    // Receipts sheet
+    if (receiptData.length > 0) {
+      const wsReceipts = XLSX.utils.json_to_sheet(receiptData);
+      XLSX.utils.book_append_sheet(wb, wsReceipts, 'Receipts');
+    }
+    
+    // Credit Notes sheet
+    if (cnData.length > 0) {
+      const wsCN = XLSX.utils.json_to_sheet(cnData);
+      XLSX.utils.book_append_sheet(wb, wsCN, 'Credit Notes');
+    }
+    
+    // Combined sheet
+    const combinedData = [
+      ...receiptData.map(r => ({ ...r, 'Base Amount': '', 'GST': '', 'Reason': '' })),
+      ...cnData.map(cn => ({ 'Type': cn.Type, 'Voucher No': cn['Voucher No'], 'Date': cn.Date, 'Party Name': cn['Party Name'], 'Against Invoice': cn['Against Invoice'], 'Amount': cn['Base Amount'], 'TDS': cn.GST, 'Total': cn.Total, 'Payment Mode': '', 'Narration': cn.Reason }))
+    ];
+    const wsCombined = XLSX.utils.json_to_sheet(combinedData);
+    XLSX.utils.book_append_sheet(wb, wsCombined, 'Combined');
+    
     XLSX.writeFile(wb, `Receipt_CN_Register_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
   
