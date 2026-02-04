@@ -2967,10 +2967,13 @@ ${companyConfig.email}`;
   const [currentInvoiceHtml, setCurrentInvoiceHtml] = useState('');
   
   const generateInvoiceHtml = (row) => {
+    // Check if this is a service invoice
+    const isServiceInvoice = row.serviceType || row.isService;
+    
     let campaigns = [row];
     let totalAmount = parseFloat(row.invoiceAmount) || 0;
     
-    if (row.invoiceType === 'Combined' && row.combinationCode !== 'NA') {
+    if (!isServiceInvoice && row.invoiceType === 'Combined' && row.combinationCode !== 'NA') {
       campaigns = masterData.filter(r => r.combinationCode === row.combinationCode);
       totalAmount = campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
     }
@@ -2987,28 +2990,49 @@ ${companyConfig.email}`;
     const totalTax = cgst + sgst + igst;
     const grandTotal = totalAmount + totalTax;
     
-    const lineItemsHtml = campaigns.map((c, i) => `
-      <tr>
-        <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">${i + 1}</td>
-        <td style="border: 1px solid #000; padding: 8px; font-size: 12px;">
-          <div style="font-weight: 600;">PROMOTIONAL TRADE EMAILER</div>
-          <div style="font-style: italic; color: #555; font-size: 11px; margin-top: 2px;">${c.senderName || ''} - ${formatDate(c.date)}</div>
-          <div style="font-style: italic; color: #555; font-size: 11px;">Subject: ${c.subject || ''}</div>
-        </td>
-        <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">${companyConfig.hsnCode}</td>
-        <td style="border: 1px solid #000; padding: 8px; text-align: right; font-size: 12px;">${formatCurrencyShort(parseFloat(c.invoiceAmount) || 0)}</td>
-      </tr>
-    `).join('');
-    
-    let allMailerImages = [];
-    if (row.invoiceType === 'Combined' && row.combinationCode !== 'NA') {
-      campaigns.forEach(c => {
-        const imgs = mailerImages[c.id] || [];
-        imgs.forEach(img => allMailerImages.push({ img, campaign: c }));
-      });
+    // Generate line items HTML based on invoice type
+    let lineItemsHtml;
+    if (isServiceInvoice) {
+      // Service invoice - use serviceType as particulars
+      lineItemsHtml = `
+        <tr>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">1</td>
+          <td style="border: 1px solid #000; padding: 8px; font-size: 12px;">
+            <div style="font-weight: 600;">${(row.serviceType || 'SERVICE').toUpperCase()}</div>
+            <div style="font-style: italic; color: #555; font-size: 11px; margin-top: 2px;">Date: ${formatDate(row.date)}</div>
+          </td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">${companyConfig.hsnCode}</td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: right; font-size: 12px;">${formatCurrencyShort(totalAmount)}</td>
+        </tr>
+      `;
     } else {
-      const imgs = mailerImages[row.id] || [];
-      imgs.forEach(img => allMailerImages.push({ img, campaign: row }));
+      // Master sheet invoice - use PROMOTIONAL TRADE EMAILER
+      lineItemsHtml = campaigns.map((c, i) => `
+        <tr>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">${i + 1}</td>
+          <td style="border: 1px solid #000; padding: 8px; font-size: 12px;">
+            <div style="font-weight: 600;">PROMOTIONAL TRADE EMAILER</div>
+            <div style="font-style: italic; color: #555; font-size: 11px; margin-top: 2px;">${c.senderName || ''} - ${formatDate(c.date)}</div>
+            <div style="font-style: italic; color: #555; font-size: 11px;">Subject: ${c.subject || ''}</div>
+          </td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: center; font-size: 12px;">${companyConfig.hsnCode}</td>
+          <td style="border: 1px solid #000; padding: 8px; text-align: right; font-size: 12px;">${formatCurrencyShort(parseFloat(c.invoiceAmount) || 0)}</td>
+        </tr>
+      `).join('');
+    }
+    
+    // Mailer images (only for Master Sheet invoices)
+    let allMailerImages = [];
+    if (!isServiceInvoice) {
+      if (row.invoiceType === 'Combined' && row.combinationCode !== 'NA') {
+        campaigns.forEach(c => {
+          const imgs = mailerImages[c.id] || [];
+          imgs.forEach(img => allMailerImages.push({ img, campaign: c }));
+        });
+      } else {
+        const imgs = mailerImages[row.id] || [];
+        imgs.forEach(img => allMailerImages.push({ img, campaign: row }));
+      }
     }
     
     const mailerPagesHtml = allMailerImages.map(({ img, campaign }) => `
@@ -3298,7 +3322,7 @@ ${generateInvoiceHtml(row)}
             <X size={18} />
             {!sidebarCollapsed && <span>Logout</span>}
           </button>
-          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix17</div>}
+          {!sidebarCollapsed && <div style={{ textAlign: 'center', fontSize: '10px', color: '#64748B', marginTop: '8px' }}>v38-fix19</div>}
         </div>
       </div>
     );
@@ -3983,7 +4007,7 @@ ${generateInvoiceHtml(row)}
     }
   };
   
-  // Generate service invoice PDF
+  // Generate service invoice PDF - uses same modal as Master Sheet
   const generateServiceInvoicePDF = (row) => {
     console.log('generateServiceInvoicePDF called with:', row);
     
@@ -3999,99 +4023,9 @@ ${generateInvoiceHtml(row)}
       return;
     }
     
-    const partyGstin = getPartyGstinFromMaster(row.partyName, row.statePartyDetails);
-    const partyAddress = getPartyAddressFromMaster(row.partyName, row.statePartyDetails);
-    const partyState = row.statePartyDetails;
-    
-    const baseAmount = parseFloat(row.invoiceAmount) || 0;
-    const cgst = parseFloat(row.cgst) || 0;
-    const sgst = parseFloat(row.sgst) || 0;
-    const igst = parseFloat(row.igst) || 0;
-    const grandTotal = parseFloat(row.invoiceTotalAmount) || (baseAmount + cgst + sgst + igst);
-    const isSameState = cgst > 0;
-    const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails) || '';
-    
-    console.log('Generating invoice PDF for:', row.invoiceNo, 'Amount:', grandTotal);
-    
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Tax Invoice - ${row.invoiceNo}</title>
-  <style>
-    @media print { body { -webkit-print-color-adjust: exact !important; } @page { size: A4; margin: 10mm; } }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; font-size: 12px; }
-    .invoice-container { max-width: 800px; margin: 0 auto; border: 2px solid #000; }
-  </style>
-</head>
-<body>
-  <div class="invoice-container">
-    <div style="text-align: center; padding: 15px; border-bottom: 2px solid #000; font-size: 20px; font-weight: bold;">Tax Invoice</div>
-    <div style="text-align: center; padding: 5px; border-bottom: 1px solid #000; font-style: italic; font-size: 11px; background: #f5f5f5;">(Original for Recipient)</div>
-    <div style="display: flex; border-bottom: 2px solid #000;">
-      <div style="flex: 1.5; padding: 12px; border-right: 2px solid #000;">
-        <div style="font-size: 16px; font-weight: bold; color: #1a5276; margin-bottom: 8px;">${companyConfig.name}</div>
-        <div style="font-size: 11px; line-height: 1.5;">${companyConfig.address}<br>${companyConfig.addressLine2}, ${companyConfig.city}<br><strong>GSTIN/UIN:</strong> ${companyConfig.gstin}<br><strong>State:</strong> ${companyConfig.stateName}, Code: ${companyConfig.stateCode}<br><strong>Contact:</strong> ${companyConfig.phone}<br><strong>E-Mail:</strong> ${companyConfig.email}</div>
-      </div>
-      <div style="flex: 1; padding: 0;">
-        <div style="display: flex; border-bottom: 1px solid #000;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Invoice No.</div><div style="flex: 1; padding: 8px; color: #1a5276; font-weight: bold;">${row.invoiceNo}</div></div>
-        <div style="display: flex;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Dated</div><div style="flex: 1; padding: 8px;">${formatDate(row.invoiceDate)}</div></div>
-      </div>
-    </div>
-    <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
-      <div style="font-size: 11px; color: #666; margin-bottom: 3px;">Buyer (Bill to)</div>
-      <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px; color: #1a5276;">${row.partyName}${rowClientCode ? ' <span style="background:#9333EA;color:white;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:8px;">' + rowClientCode + '</span>' : ''}</div>
-      <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${partyState || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${partyState || companyConfig.stateName}</div>
-    </div>
-    <table style="width: 100%; border-collapse: collapse;">
-      <thead><tr style="background: #e8e8e8;"><th style="border: 1px solid #000; padding: 10px; width: 45px;">Sl No.</th><th style="border: 1px solid #000; padding: 10px;">Particulars</th><th style="border: 1px solid #000; padding: 10px; width: 80px;">HSN/SAC</th><th style="border: 1px solid #000; padding: 10px; width: 100px; text-align: right;">Amount</th></tr></thead>
-      <tbody>
-        <tr>
-          <td style="border: 1px solid #000; padding: 8px; text-align: center;">1</td>
-          <td style="border: 1px solid #000; padding: 8px;">
-            <div style="font-weight: 600;">${(row.serviceType || row.campaignName || 'SERVICE').toUpperCase()}</div>
-            <div style="font-style: italic; color: #555; font-size: 11px;">Date: ${formatDate(row.date)}</div>
-          </td>
-          <td style="border: 1px solid #000; padding: 8px; text-align: center;">${companyConfig.hsnCode}</td>
-          <td style="border: 1px solid #000; padding: 8px; text-align: right;">${formatCurrencyShort(baseAmount)}</td>
-        </tr>
-        ${isSameState ? `
-          <tr><td colspan="3" style="border: 1px solid #000; padding: 8px; text-align: right; font-weight: 600;">CGST @ 9%</td><td style="border: 1px solid #000; padding: 8px; text-align: right;">${formatCurrencyShort(cgst)}</td></tr>
-          <tr><td colspan="3" style="border: 1px solid #000; padding: 8px; text-align: right; font-weight: 600;">SGST @ 9%</td><td style="border: 1px solid #000; padding: 8px; text-align: right;">${formatCurrencyShort(sgst)}</td></tr>
-        ` : `
-          <tr><td colspan="3" style="border: 1px solid #000; padding: 8px; text-align: right; font-weight: 600;">IGST @ 18%</td><td style="border: 1px solid #000; padding: 8px; text-align: right;">${formatCurrencyShort(igst)}</td></tr>
-        `}
-        <tr style="background: #2874A6; color: white;"><td colspan="3" style="border: 1px solid #000; padding: 12px; text-align: right; font-weight: bold; font-size: 14px;">Total</td><td style="border: 1px solid #000; padding: 12px; text-align: right; font-weight: bold; font-size: 14px;">₹ ${grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td></tr>
-      </tbody>
-    </table>
-    <div style="padding: 10px 12px; border: 1px solid #000; border-top: none; background: #fafafa;"><div style="color: #666; font-size: 11px; margin-bottom: 3px;">Amount Chargeable (in words)</div><div style="font-weight: bold; font-size: 13px;">${numberToWords(grandTotal)}</div></div>
-    <div style="display: flex; border-top: 2px solid #000;">
-      <div style="flex: 1; padding: 10px 12px; border-right: 2px solid #000; font-size: 11px;"><div><strong>Company's PAN:</strong> ${companyConfig.pan}</div><div style="margin-top: 4px;"><strong>MSME Reg. No.:</strong> UDYAM-MH-19-0057219</div></div>
-      <div style="flex: 1.2; padding: 10px 12px; font-size: 11px;">
-        <div style="font-weight: bold; margin-bottom: 6px; color: #1a5276;">Company's Bank Details</div>
-        <div style="line-height: 1.5;"><strong>A/c Holder:</strong> ${companyConfig.bank.holder}<br><strong>Bank:</strong> ${companyConfig.bank.name}<br><strong>A/c No.:</strong> ${companyConfig.bank.account}<br><strong>IFSC:</strong> ${companyConfig.bank.ifsc}</div>
-        <div style="text-align: right; margin-top: 30px;"><div style="font-weight: bold;">for ${companyConfig.name}</div><div style="margin-top: 25px; border-top: 1px solid #000; display: inline-block; padding-top: 4px; font-size: 10px;">Authorised Signatory</div></div>
-      </div>
-    </div>
-    <div style="text-align: center; padding: 8px; background: #f0f0f0; border-top: 1px solid #000; font-size: 10px; color: #666; font-style: italic;">This is a Computer Generated Invoice</div>
-  </div>
-</body>
-</html>`;
-    
-    try {
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.document.write(html);
-        printWindow.document.close();
-        printWindow.focus();
-      } else {
-        alert('Pop-up blocked. Please allow pop-ups for this site to view invoices.');
-      }
-    } catch (err) {
-      console.error('Error opening invoice:', err);
-      alert('Error opening invoice: ' + err.message);
-    }
+    // Mark as service invoice and use the same viewInvoice function as Master Sheet
+    const serviceRow = { ...row, isService: true };
+    viewInvoice(serviceRow);
   };
   
   // Services parties list
@@ -4752,6 +4686,25 @@ ${generateInvoiceHtml(row)}
     const wb = XLSX.utils.book_new();
     let sheetsAdded = 0;
     
+    // Build set of party names that have client codes
+    const partyNamesWithCodesSet = new Set();
+    partiesForLedger.forEach(p => {
+      if (p.clientCode) {
+        partyNamesWithCodesSet.add(p.partyNameUpper);
+      }
+    });
+    
+    // Filter parties: Remove any party without clientCode if same name has entries WITH clientCode
+    const filteredPartiesForExport = partiesForLedger.filter(p => {
+      if (!p.clientCode && partyNamesWithCodesSet.has(p.partyNameUpper)) {
+        console.log('Export: Skipping party without code:', p.partyName);
+        return false;
+      }
+      return true;
+    });
+    
+    console.log('Export: Processing', filteredPartiesForExport.length, 'parties');
+    
     // Helper to get year suffix
     const getInvoiceYearSuffix = (vchNo) => {
       if (!vchNo) return '';
@@ -4761,7 +4714,7 @@ ${generateInvoiceHtml(row)}
       return parts[parts.length - 1];
     };
     
-    partiesForLedger.forEach(partyInfo => {
+    filteredPartiesForExport.forEach(partyInfo => {
       const party = partyInfo.partyName;
       const partyState = partyInfo.normalizedState;
       const partyClientCode = partyInfo.clientCode || '';
@@ -5664,11 +5617,28 @@ ${generateInvoiceHtml(row)}
     // Use the same buildDetailedLedger logic
     const opening = openingBalances[selectedParty] || 0;
     
-    // Get all invoices from masterData (STATE-AWARE)
+    // Helper to check if row matches the selected Client Code
+    const matchesClientCode = (row) => {
+      if (!selectedPartyClientCode) return true; // No Client Code filter
+      const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
+      return rowClientCode === selectedPartyClientCode;
+    };
+    
+    // Get all invoices from masterData (STATE-AWARE + CLIENT CODE AWARE)
     const partyInvoices = masterData.filter(r => 
       matchParty(r.partyName, selectedParty) && 
       r.invoiceGenerated && 
       r.invoiceStatus === 'Approved' &&
+      matchesClientCode(r) &&
+      (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
+    );
+    
+    // Get service invoices (STATE-AWARE + CLIENT CODE AWARE)
+    const partyServiceInvoices = servicesData.filter(r => 
+      matchParty(r.partyName, selectedParty) && 
+      r.invoiceGenerated && 
+      r.invoiceStatus === 'Approved' &&
+      matchesClientCode(r) &&
       (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
     );
     
@@ -5683,6 +5653,20 @@ ${generateInvoiceHtml(row)}
         });
       } else {
         invoiceMap.get(row.invoiceNo).campaigns.push(row);
+      }
+    });
+    
+    // Add service invoices to the map
+    partyServiceInvoices.forEach(row => {
+      if (!invoiceMap.has(row.invoiceNo)) {
+        invoiceMap.set(row.invoiceNo, {
+          invoiceNo: row.invoiceNo,
+          invoiceDate: row.invoiceDate,
+          campaigns: [row],
+          isFromMaster: false,
+          isService: true,
+          serviceType: row.serviceType
+        });
       }
     });
     
@@ -5870,6 +5854,93 @@ ${generateInvoiceHtml(row)}
           const cnBase = Math.abs(matchingCN.amount) || cnAmount / 1.18;
           const cnTax = Math.abs(matchingCN.gst) || (cnAmount - cnBase);
           pdfRows.push({ particular: 'PROMOTIONAL TRADE EMAILER', credit: cnBase, isMain: false, isCreditNote: true, hasCN: true });
+          pdfRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: cnTax, isMain: false, isCreditNote: true, hasCN: true });
+        }
+      } else if (entry.isService) {
+        // Process SERVICE invoice
+        const inv = entry;
+        const campaign = inv.campaigns[0] || {};
+        const baseAmount = parseFloat(campaign.invoiceAmount) || 0;
+        const serviceType = inv.serviceType || campaign.serviceType || 'SERVICE';
+        
+        const isSameState = campaign.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const cgst = isSameState ? baseAmount * 0.09 : 0;
+        const sgst = isSameState ? baseAmount * 0.09 : 0;
+        const igst = isSameState ? 0 : baseAmount * 0.18;
+        const totalAmount = baseAmount + cgst + sgst + igst;
+        
+        const invYearSuffix = getInvoiceYearSuffix(inv.invoiceNo);
+        const matchingCN = creditNoteByYearSuffix.get(invYearSuffix);
+        const hasCN = !!matchingCN;
+        
+        const invoiceReceipt = partyReceipts.find(r => r.invoiceNo === inv.invoiceNo);
+        runningBalance += totalAmount;
+        totalDebit += totalAmount;
+        
+        let amountReceived = 0, tdsReceived = 0, receiptDate = '', paymentStatus = hasCN ? '' : 'Pending';
+        if (invoiceReceipt) {
+          paymentStatus = 'Received';
+          amountReceived = invoiceReceipt.amount || 0;
+          tdsReceived = invoiceReceipt.tds || invoiceReceipt.tdsAmount || 0;
+          receiptDate = invoiceReceipt.date;
+          totalReceived += amountReceived;
+          totalTds += tdsReceived;
+          runningBalance -= (amountReceived + tdsReceived + (invoiceReceipt.discount || 0));
+        }
+        
+        pdfRows.push({
+          date: inv.invoiceDate,
+          particular: selectedParty,
+          vchType: 'Sales',
+          vchNo: inv.invoiceNo,
+          debit: totalAmount,
+          credit: 0,
+          receiptDate: receiptDate,
+          amountReceived: amountReceived,
+          tds: tdsReceived,
+          balance: hasCN ? '-' : (paymentStatus === 'Received' ? 0 : totalAmount - amountReceived - tdsReceived),
+          status: paymentStatus,
+          isMain: true,
+          hasCN: hasCN,
+          isService: true
+        });
+        
+        // Sub-rows with SERVICE TYPE
+        pdfRows.push({ particular: serviceType.toUpperCase(), credit: baseAmount, isMain: false, hasCN: hasCN });
+        if (isSameState) {
+          pdfRows.push({ particular: 'CGST', credit: cgst, isMain: false, hasCN: hasCN });
+          pdfRows.push({ particular: 'SGST', credit: sgst, isMain: false, hasCN: hasCN });
+        } else {
+          pdfRows.push({ particular: 'IGST', credit: igst, isMain: false, hasCN: hasCN });
+        }
+        
+        // Add CN right after service invoice
+        if (matchingCN && !processedCNKeys.has(invYearSuffix)) {
+          processedCNKeys.add(invYearSuffix);
+          const cnAmount = Math.abs(matchingCN.totalAmount || matchingCN.credit || 0);
+          runningBalance -= cnAmount;
+          totalCredit += cnAmount;
+          
+          pdfRows.push({
+            date: matchingCN.date,
+            particular: selectedParty,
+            vchType: 'Credit Note',
+            vchNo: matchingCN.creditNoteNo || matchingCN.vchNo,
+            debit: 0,
+            credit: cnAmount,
+            receiptDate: '',
+            amountReceived: 0,
+            tds: 0,
+            balance: '-',
+            status: '',
+            isMain: true,
+            isCreditNote: true,
+            hasCN: true
+          });
+          
+          const cnBase = Math.abs(matchingCN.amount) || cnAmount / 1.18;
+          const cnTax = Math.abs(matchingCN.gst) || (cnAmount - cnBase);
+          pdfRows.push({ particular: serviceType.toUpperCase(), credit: cnBase, isMain: false, isCreditNote: true, hasCN: true });
           pdfRows.push({ particular: matchingCN.gstType || (isSameState ? 'CGST + SGST' : 'IGST'), credit: cnTax, isMain: false, isCreditNote: true, hasCN: true });
         }
       } else if (entry.isHistorical) {
