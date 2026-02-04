@@ -2842,10 +2842,15 @@ Phone: ${companyConfig.phone}`;
   };
 
   // ============================================
-  // EMAIL GENERATION - UPDATED FOR COMBINED
+  // EMAIL GENERATION - UPDATED FOR COMBINED AND SERVICES
   // ============================================
   
   const generateEmailSubject = (row) => {
+    // Check if this is a service invoice
+    if (row.serviceType || row.isService) {
+      return `Invoice ${row.invoiceNo || ''} - ${(row.serviceType || 'SERVICE').toUpperCase()}`;
+    }
+    
     const campaigns = getCombinedCampaigns(row);
     if (campaigns.length > 1) {
       const names = campaigns.map(c => c.senderName).join(', ');
@@ -2855,24 +2860,30 @@ Phone: ${companyConfig.phone}`;
   };
 
   const generateEmailBody = (row) => {
-    const campaigns = getCombinedCampaigns(row);
     const amount = parseFloat(row.invoiceTotalAmount) || parseFloat(row.totalWithGst) || (parseFloat(row.invoiceAmount) * 1.18);
     
-    let campaignDetails = '';
-    if (campaigns.length > 1) {
-      campaignDetails = 'Campaigns included in this invoice:\n';
-      campaigns.forEach((c, i) => {
-        campaignDetails += `${i + 1}. ${c.senderName} - ${c.subject}\n`;
-      });
+    let serviceDetails = '';
+    
+    // Check if this is a service invoice
+    if (row.serviceType || row.isService) {
+      serviceDetails = `Type of Service: ${(row.serviceType || 'SERVICE').toUpperCase()}`;
     } else {
-      campaignDetails = `Campaign: ${row.senderName}\nSubject: ${row.subject}`;
+      const campaigns = getCombinedCampaigns(row);
+      if (campaigns.length > 1) {
+        serviceDetails = 'Campaigns included in this invoice:\n';
+        campaigns.forEach((c, i) => {
+          serviceDetails += `${i + 1}. ${c.senderName} - ${c.subject}\n`;
+        });
+      } else {
+        serviceDetails = `Campaign: ${row.senderName}\nSubject: ${row.subject}`;
+      }
     }
     
     return `Dear Sir/Madam,
 
 Please find attached the invoice for the following:
 
-${campaignDetails}
+${serviceDetails}
 
 Invoice No: ${row.invoiceNo || 'To be generated'}
 Invoice Amount: ${formatCurrency(amount)}
@@ -3851,10 +3862,10 @@ ${generateInvoiceHtml(row)}
   const deleteServiceRow = (id) => {
     const row = servicesData.find(r => r.id === id);
     if (row?.invoiceGenerated && row?.invoiceStatus === 'Approved') {
-      alert('Cannot delete approved invoices');
+      alert('Cannot delete approved invoices. Delete from Invoice Register instead.');
       return;
     }
-    if (confirm('Delete this service entry?')) {
+    if (window.confirm('Delete this service entry?')) {
       setServicesData(prev => prev.filter(r => r.id !== id));
     }
   };
@@ -3890,7 +3901,8 @@ ${generateInvoiceHtml(row)}
         igst: igst.toFixed(2),
         totalWithGst: totalAmount.toFixed(2),
         invoiceGenerated: true,
-        invoiceStatus: 'Created'
+        invoiceStatus: 'Created',
+        isService: true  // Mark as service invoice for proper identification
       } : r
     ));
     
@@ -5539,7 +5551,14 @@ ${generateInvoiceHtml(row)}
                               ) : (
                                 <>
                                   {/* System invoice actions */}
-                                  <ActionButton icon={Eye} small variant="brand" onClick={() => downloadInvoice(inv.campaigns[0])} title="View Invoice" />
+                                  <ActionButton icon={Eye} small variant="brand" onClick={() => {
+                                    // Use correct function based on invoice type
+                                    if (inv.isService || inv.invoiceType === 'Service') {
+                                      generateServiceInvoicePDF(inv.campaigns[0]);
+                                    } else {
+                                      downloadInvoice(inv.campaigns[0]);
+                                    }
+                                  }} title="View Invoice" />
                                   {canEdit && inv.invoiceStatus === 'Approved' && inv.mailingSent === 'Yes' && !invoiceReceipt && (
                                     <ActionButton icon={Receipt} small variant="success" onClick={() => openReceiptModal(inv.campaigns[0])} title="Create Receipt" />
                                   )}
@@ -8377,7 +8396,12 @@ ${generateInvoiceHtml(row)}
             <div style={{ backgroundColor: '#EFF6FF', padding: '14px', borderRadius: '10px', marginBottom: '16px' }}>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Invoice:</strong> {selectedRow.invoiceNo}</div>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Amount:</strong> {formatCurrency(selectedRow.invoiceTotalAmount || selectedRow.totalWithGst)}</div>
-              {selectedRow.invoiceType === 'Combined' && (
+              {/* Show Type of Service for service invoices, Campaigns for combined invoices */}
+              {(selectedRow.serviceType || selectedRow.isService) ? (
+                <div style={{ fontSize: '13px', marginTop: '8px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '6px 10px', borderRadius: '6px' }}>
+                  <strong>Type of Service:</strong> {(selectedRow.serviceType || 'SERVICE').toUpperCase()}
+                </div>
+              ) : selectedRow.invoiceType === 'Combined' && (
                 <div style={{ fontSize: '13px', marginTop: '8px', color: '#7C3AED' }}>
                   <strong>Campaigns:</strong> {getCombinedCampaigns(selectedRow).map(c => c.senderName).join(', ')}
                 </div>
@@ -8407,7 +8431,15 @@ ${generateInvoiceHtml(row)}
             )}
             
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '16px' }}>
-              <ActionButton label="View Invoice" icon={Eye} onClick={() => { setShowEmailModal(false); downloadInvoice(selectedRow); }} />
+              <ActionButton label="View Invoice" icon={Eye} onClick={() => { 
+                setShowEmailModal(false); 
+                // Use correct function based on invoice type
+                if (selectedRow.serviceType || selectedRow.isService) {
+                  generateServiceInvoicePDF(selectedRow);
+                } else {
+                  downloadInvoice(selectedRow);
+                }
+              }} />
               <ActionButton label="Close" onClick={() => setShowEmailModal(false)} />
             </div>
           </div>
