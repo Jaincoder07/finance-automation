@@ -305,7 +305,7 @@ const saveAppStateChunked = async (userId, state) => {
   await setDoc(doc(db, "appState", `${userId}_chunk2`), chunk2);
 };
 
-// Load app state (handles both chunked and non-chunked)
+// Load app state (handles both chunked and non-chunked, with legacy image migration)
 export const loadAppState = async (userId) => {
   try {
     const docSnap = await getDoc(doc(db, "appState", userId));
@@ -322,14 +322,47 @@ export const loadAppState = async (userId) => {
       }
     }
 
-    // Load images and logo from separate collections
-    const mailerImages = await loadMailerImages(userId);
-    const mailerLogo = await loadMailerLogo(userId);
+    // Load images from separate collections (new format)
+    let mailerImages = await loadMailerImages(userId);
+    let mailerLogo = await loadMailerLogo(userId);
+
+    // ============================================
+    // MIGRATION: If separate collections are empty but main document has images,
+    // use the legacy images and migrate them to the new separate collections
+    // ============================================
+    const hasNewImages = mailerImages && Object.keys(mailerImages).length > 0;
+    const hasLegacyImages = data.mailerImages && typeof data.mailerImages === 'object' && Object.keys(data.mailerImages).length > 0;
+    
+    if (!hasNewImages && hasLegacyImages) {
+      console.log('🔄 MIGRATION: Found legacy images in main document, migrating to separate collection...');
+      mailerImages = data.mailerImages;
+      
+      // Migrate to new separate collection in background
+      try {
+        await saveMailerImages(userId, mailerImages);
+        console.log('✅ MIGRATION: Legacy images migrated to separate collection successfully');
+      } catch (migrationError) {
+        console.warn('⚠️ MIGRATION: Could not migrate images (will retry next load):', migrationError);
+      }
+    }
+
+    // Same for logo
+    if (!mailerLogo && data.mailerLogo) {
+      console.log('🔄 MIGRATION: Found legacy logo in main document, migrating...');
+      mailerLogo = data.mailerLogo;
+      
+      try {
+        await saveMailerLogo(userId, mailerLogo);
+        console.log('✅ MIGRATION: Legacy logo migrated successfully');
+      } catch (migrationError) {
+        console.warn('⚠️ MIGRATION: Could not migrate logo:', migrationError);
+      }
+    }
 
     return {
       ...data,
-      mailerImages,
-      mailerLogo
+      mailerImages: mailerImages || {},
+      mailerLogo: mailerLogo || null
     };
   } catch (error) {
     console.error("Error loading app state:", error);
@@ -352,14 +385,22 @@ export const subscribeToAppState = (userId, callback) => {
         }
       }
 
-      // Load images separately (they don't trigger this listener)
-      const mailerImages = await loadMailerImages(userId);
-      const mailerLogo = await loadMailerLogo(userId);
+      // Load images from separate collection
+      let mailerImages = await loadMailerImages(userId);
+      let mailerLogo = await loadMailerLogo(userId);
+
+      // Fallback to legacy images in main document if separate collection is empty
+      if ((!mailerImages || Object.keys(mailerImages).length === 0) && data.mailerImages && Object.keys(data.mailerImages).length > 0) {
+        mailerImages = data.mailerImages;
+      }
+      if (!mailerLogo && data.mailerLogo) {
+        mailerLogo = data.mailerLogo;
+      }
 
       callback({
         ...data,
-        mailerImages,
-        mailerLogo
+        mailerImages: mailerImages || {},
+        mailerLogo: mailerLogo || null
       });
     }
   }, (error) => {
