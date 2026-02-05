@@ -900,7 +900,7 @@ export default function FinanceApp() {
       } catch (error) {
         console.error('❌ Error saving images:', error);
       }
-    }, 5000); // 5 second debounce for images (they're larger)
+    }, 2000); // 2 second debounce for images
     
     return () => {
       if (imageSaveTimeoutRef.current) {
@@ -1170,13 +1170,13 @@ export default function FinanceApp() {
       
       // Objects - ensure they're actually objects
       if (data.openingBalances && typeof data.openingBalances === 'object' && !Array.isArray(data.openingBalances)) setOpeningBalances(data.openingBalances);
-      // mailerImages now come from separate collection via subscribeToAppState
-      if (data.mailerImages && typeof data.mailerImages === 'object' && !Array.isArray(data.mailerImages) && Object.keys(data.mailerImages).length > 0) setMailerImages(data.mailerImages);
+      // IMPORTANT: Do NOT set mailerImages or mailerLogo from real-time listener!
+      // They are managed separately (loaded once on init, saved to separate collection).
+      // Setting them here causes a race condition that wipes images.
       if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) setPartyMaster(data.partyMaster);
       if (data.userPasswords && typeof data.userPasswords === 'object' && !Array.isArray(data.userPasswords)) setUserPasswords(data.userPasswords);
       
-      // Other types
-      if (data.mailerLogo) setMailerLogo(data.mailerLogo);
+      // Other types - NO mailerLogo here (managed separately)
       if (data.companyConfig) setCompanyConfig(prev => ({ 
         ...prev, 
         ...data.companyConfig,

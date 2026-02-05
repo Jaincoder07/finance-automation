@@ -371,6 +371,8 @@ export const loadAppState = async (userId) => {
 };
 
 // Real-time listener for app state changes
+// NOTE: Does NOT handle mailerImages/mailerLogo - those are loaded once on init
+// and saved separately to avoid race conditions
 export const subscribeToAppState = (userId, callback) => {
   const docRef = doc(db, "appState", userId);
   return onSnapshot(docRef, async (docSnapshot) => {
@@ -385,23 +387,13 @@ export const subscribeToAppState = (userId, callback) => {
         }
       }
 
-      // Load images from separate collection
-      let mailerImages = await loadMailerImages(userId);
-      let mailerLogo = await loadMailerLogo(userId);
+      // DO NOT load or pass mailerImages/mailerLogo here.
+      // They are managed separately to avoid the race condition where:
+      // 1) State save triggers listener
+      // 2) Listener loads images from separate collection (not yet saved)
+      // 3) Gets empty result → overwrites in-memory images → images vanish
 
-      // Fallback to legacy images in main document if separate collection is empty
-      if ((!mailerImages || Object.keys(mailerImages).length === 0) && data.mailerImages && Object.keys(data.mailerImages).length > 0) {
-        mailerImages = data.mailerImages;
-      }
-      if (!mailerLogo && data.mailerLogo) {
-        mailerLogo = data.mailerLogo;
-      }
-
-      callback({
-        ...data,
-        mailerImages: mailerImages || {},
-        mailerLogo: mailerLogo || null
-      });
+      callback(data);
     }
   }, (error) => {
     console.error("Error in real-time listener:", error);
