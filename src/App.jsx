@@ -10,7 +10,7 @@ import {
   Edit2, Save, ExternalLink, Clipboard, Table, Link2, Camera, FileDown, PlusCircle,
   MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone, Lock
 } from 'lucide-react';
-import { saveAppState, loadAppState, subscribeToAppState } from './firebase';
+import { saveAppState, loadAppState, subscribeToAppState, saveMailerImages, saveMailerLogo, loadMailerImages, loadMailerLogo } from './firebase';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -525,6 +525,8 @@ export default function FinanceApp() {
   const pasteAreaRef = useRef(null);
   const paymentAdvisoryRef = useRef(null);
   const saveTimeoutRef = useRef(null);
+  const dataLoadedRef = useRef(false);       // CRITICAL: prevents auto-save before data loads
+  const imageSaveTimeoutRef = useRef(null);   // Separate debounce for image saves
   const partyMasterInputRef = useRef(null);
   const historicalLedgerInputRef = useRef(null);
 
@@ -733,11 +735,13 @@ export default function FinanceApp() {
   // Load data from Firebase on login
   const loadDataFromFirebase = async () => {
     setIsLoading(true);
+    dataLoadedRef.current = false; // CRITICAL: Block auto-save while loading
+    
     try {
       const data = await loadAppState('indreesh-media');
       if (data) {
         // Arrays - ensure they're actually arrays
-        if (Array.isArray(data.masterData)) setMasterData(data.masterData);
+        if (Array.isArray(data.masterData) && data.masterData.length > 0) setMasterData(data.masterData);
         if (Array.isArray(data.servicesData)) setServicesData(data.servicesData);
         if (Array.isArray(data.ledgerEntries)) setLedgerEntries(data.ledgerEntries);
         if (Array.isArray(data.receipts)) setReceipts(data.receipts);
@@ -775,27 +779,51 @@ export default function FinanceApp() {
         }
         if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
         if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
-        console.log('Data loaded from Firebase');
+        console.log('✅ Data loaded from Firebase successfully');
+        console.log(`   Master records: ${data.masterData?.length || 0}, Services: ${data.servicesData?.length || 0}`);
+        console.log(`   Mailer images: ${Object.keys(data.mailerImages || {}).length} groups`);
+      } else {
+        console.log('ℹ️ No existing data in Firebase - starting fresh');
       }
     } catch (error) {
-      console.error('Error loading data:', error);
+      console.error('❌ Error loading data:', error);
     }
     setIsLoading(false);
+    
+    // CRITICAL: Enable auto-save AFTER a delay to ensure all setState calls have completed
+    setTimeout(() => {
+      dataLoadedRef.current = true;
+      console.log('✅ Auto-save enabled (data loaded)');
+    }, 3000); // 3 second delay to let all state settle
   };
 
-  // Save data to Firebase (debounced)
+  // Save data to Firebase (debounced) - FIXED: guards against race condition
   const saveDataToFirebase = useCallback(async () => {
+    // CRITICAL: Do NOT save if data hasn't been loaded yet (prevents wiping data on app start)
+    if (!dataLoadedRef.current) {
+      console.log('⏳ Skipping save - data not loaded yet');
+      return;
+    }
+    
+    // CRITICAL: Do NOT save if we're receiving a real-time update from Firebase
+    if (isReceivingUpdateRef.current) {
+      console.log('⏳ Skipping save - receiving server update');
+      return;
+    }
+
     setIsSaving(true);
     try {
       // Debug: Log what we're saving
       console.log('Saving to Firebase:', {
         masterDataCount: masterData?.length,
         servicesDataCount: servicesData?.length,
-        servicesDataSample: servicesData?.slice(0, 1),
         receiptsCount: receipts?.length,
         creditNotesCount: creditNotes?.length
       });
       
+      // NOTE: mailerImages and mailerLogo are NOT included here
+      // They are saved separately to their own Firestore collections
+      // to avoid the 1MB document size limit
       await saveAppState('indreesh-media', {
         masterData,
         servicesData,
@@ -803,8 +831,8 @@ export default function FinanceApp() {
         receipts,
         creditNotes,
         openingBalances,
-        mailerImages,
-        mailerLogo,
+        // mailerImages - REMOVED: saved separately via saveMailerImages()
+        // mailerLogo - REMOVED: saved separately via saveMailerLogo()
         companyConfig,
         nextInvoiceNo,
         nextCombineNo,
@@ -819,16 +847,16 @@ export default function FinanceApp() {
         userPasswords
       });
       setLastSaved(new Date());
-      console.log('Data saved to Firebase successfully');
+      console.log('✅ App state saved to Firebase');
     } catch (error) {
-      console.error('Error saving data:', error);
+      console.error('❌ Error saving data:', error);
     }
     setIsSaving(false);
-  }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords]);
+  }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords]);
 
-  // Auto-save when data changes (debounced 1 second for faster sync)
+  // Auto-save app state when data changes (debounced 3 seconds) - FIXED with dataLoadedRef guard
   useEffect(() => {
-    if (!isLoggedIn) return;
+    if (!isLoggedIn || !dataLoadedRef.current) return;
     
     // Skip save if we're receiving an update from Firebase (to avoid loop)
     if (isReceivingUpdateRef.current) return;
@@ -838,18 +866,48 @@ export default function FinanceApp() {
     }
     
     saveTimeoutRef.current = setTimeout(() => {
-      // Double-check we're not in a receiving state
-      if (!isReceivingUpdateRef.current) {
+      // Double-check we're not in a receiving state and data is loaded
+      if (!isReceivingUpdateRef.current && dataLoadedRef.current) {
         saveDataToFirebase();
       }
-    }, 1000);
+    }, 3000); // 3 second debounce (increased from 1s for stability)
     
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, mailerImages, mailerLogo, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords, isLoggedIn]);
+  }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords, isLoggedIn, saveDataToFirebase]);
+
+  // SEPARATE auto-save for mailer images (debounced 5 seconds, saves to separate Firestore collection)
+  // This avoids the 1MB Firestore document limit that was causing images to vanish
+  useEffect(() => {
+    if (!isLoggedIn || !dataLoadedRef.current) return;
+    if (isReceivingUpdateRef.current) return;
+    
+    if (imageSaveTimeoutRef.current) {
+      clearTimeout(imageSaveTimeoutRef.current);
+    }
+    
+    imageSaveTimeoutRef.current = setTimeout(async () => {
+      if (!dataLoadedRef.current || isReceivingUpdateRef.current) return;
+      try {
+        await saveMailerImages('indreesh-media', mailerImages);
+        if (mailerLogo) {
+          await saveMailerLogo('indreesh-media', mailerLogo);
+        }
+        console.log('✅ Images saved to Firebase (separate collection)');
+      } catch (error) {
+        console.error('❌ Error saving images:', error);
+      }
+    }, 2000); // 2 second debounce for images
+    
+    return () => {
+      if (imageSaveTimeoutRef.current) {
+        clearTimeout(imageSaveTimeoutRef.current);
+      }
+    };
+  }, [mailerImages, mailerLogo, isLoggedIn]);
 
   // ============================================
   // NOTIFICATION SYSTEM
@@ -1021,17 +1079,19 @@ export default function FinanceApp() {
     try {
       await saveAppState('indreesh-media', {
         masterData,
+        servicesData,
         ledgerEntries,
         receipts,
         creditNotes,
         openingBalances,
-        mailerImages,
-        mailerLogo,
+        // mailerImages - saved separately
+        // mailerLogo - saved separately
         companyConfig,
         nextInvoiceNo,
         nextCombineNo,
         nextReceiptNo,
         nextCreditNoteNo,
+        nextServiceInvoiceNo,
         invoiceValues,
         notifications,
         whatsappSettings,
@@ -1110,12 +1170,13 @@ export default function FinanceApp() {
       
       // Objects - ensure they're actually objects
       if (data.openingBalances && typeof data.openingBalances === 'object' && !Array.isArray(data.openingBalances)) setOpeningBalances(data.openingBalances);
-      if (data.mailerImages && typeof data.mailerImages === 'object' && !Array.isArray(data.mailerImages)) setMailerImages(data.mailerImages);
+      // IMPORTANT: Do NOT set mailerImages or mailerLogo from real-time listener!
+      // They are managed separately (loaded once on init, saved to separate collection).
+      // Setting them here causes a race condition that wipes images.
       if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) setPartyMaster(data.partyMaster);
       if (data.userPasswords && typeof data.userPasswords === 'object' && !Array.isArray(data.userPasswords)) setUserPasswords(data.userPasswords);
       
-      // Other types
-      if (data.mailerLogo) setMailerLogo(data.mailerLogo);
+      // Other types - NO mailerLogo here (managed separately)
       if (data.companyConfig) setCompanyConfig(prev => ({ 
         ...prev, 
         ...data.companyConfig,
@@ -2846,8 +2907,7 @@ Phone: ${companyConfig.phone}`;
         receipts: [],
         creditNotes: [],
         openingBalances: {},
-        mailerImages: {},
-        mailerLogo,
+        // mailerImages and mailerLogo - saved separately
         companyConfig,
         nextInvoiceNo: 1,
         nextCombineNo: 1,
@@ -2861,7 +2921,9 @@ Phone: ${companyConfig.phone}`;
         followups: [],
         userPasswords
       });
-      console.log('Data cleared and saved to Firebase');
+      // Also clear images from separate collection
+      await saveMailerImages('indreesh-media', {});
+      console.log('✅ Data cleared and saved to Firebase (including images)');
     } catch (error) {
       console.error('Error clearing data:', error);
     }
@@ -3043,6 +3105,24 @@ Phone: ${companyConfig.phone}`;
     setReplaceMode(false);
     setShowUploadModal(false);
     alert('✅ Mailer image saved!');
+  };
+
+  // Delete all mailer images for a specific row
+  const deleteMailerImages = (rowId) => {
+    if (!window.confirm('🗑️ Are you sure you want to delete the mailer image(s) for this entry?')) return;
+    
+    setMailerImages(prev => {
+      const updated = { ...prev };
+      delete updated[rowId];
+      return updated;
+    });
+    
+    // Update master data to reflect no mailer
+    setMasterData(prev => prev.map(r => r.id === rowId ? { ...r, mailerUploaded: false } : r));
+    // Also update services data if applicable
+    setServicesData(prev => prev.map(r => r.id === rowId ? { ...r, mailerUploaded: false } : r));
+    
+    alert('✅ Mailer image(s) deleted!');
   };
 
   const handlePaste = (e) => {
@@ -3762,7 +3842,10 @@ ${generateInvoiceHtml(row)}
                                   {hasMailer ? (
                                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                                       <span style={{ color: '#22C55E', fontWeight: '700', fontSize: '14px' }}>✓</span>
-                                      <button onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(true); setShowUploadModal(true); }} style={{ fontSize: '10px', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Replace</button>
+                                      <div style={{ display: 'flex', gap: '6px' }}>
+                                        <button onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(true); setShowUploadModal(true); }} style={{ fontSize: '10px', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Replace</button>
+                                        <button onClick={() => deleteMailerImages(row.id)} style={{ fontSize: '10px', color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Delete</button>
+                                      </div>
                                     </div>
                                   ) : (
                                     <ActionButton icon={Camera} small variant="default" onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(false); setShowUploadModal(true); }} />
@@ -4060,8 +4143,8 @@ ${generateInvoiceHtml(row)}
               receipts,
               creditNotes,
               openingBalances,
-              mailerImages,
-              mailerLogo,
+              // mailerImages - saved separately
+              // mailerLogo - saved separately
               companyConfig,
               nextInvoiceNo,
               nextCombineNo,
@@ -4362,12 +4445,16 @@ ${generateInvoiceHtml(row)}
                 <ActionButton icon={Save} label="Force Save" variant="secondary" onClick={async () => {
                   try {
                     isReceivingUpdateRef.current = false;
+                    dataLoadedRef.current = true;
                     await saveAppState('indreesh-media', {
                       masterData, servicesData, ledgerEntries, receipts, creditNotes,
-                      openingBalances, mailerImages, mailerLogo, companyConfig,
+                      openingBalances, companyConfig,
                       nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo,
                       invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords
                     });
+                    // Also save images separately
+                    await saveMailerImages('indreesh-media', mailerImages);
+                    if (mailerLogo) await saveMailerLogo('indreesh-media', mailerLogo);
                     setLastSaved(new Date());
                     alert('Data saved successfully!');
                   } catch (error) {
@@ -4547,7 +4634,12 @@ ${generateInvoiceHtml(row)}
                                 {hasMailer ? (
                                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                                     <span style={{ color: '#22C55E', fontWeight: '700', fontSize: '14px' }}>✓</span>
-                                    {canEdit && <button onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(true); setShowUploadModal(true); }} style={{ fontSize: '10px', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Replace</button>}
+                                    {canEdit && (
+                                      <div style={{ display: 'flex', gap: '6px' }}>
+                                        <button onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(true); setShowUploadModal(true); }} style={{ fontSize: '10px', color: '#64748B', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Replace</button>
+                                        <button onClick={() => deleteMailerImages(row.id)} style={{ fontSize: '10px', color: '#DC2626', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}>Delete</button>
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   canEdit && <ActionButton icon={Camera} small variant="default" onClick={() => { setSelectedRow(row); setPastedImage(null); setReplaceMode(false); setShowUploadModal(true); }} />
