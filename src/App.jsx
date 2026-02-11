@@ -3125,6 +3125,34 @@ Phone: ${companyConfig.phone}`;
     alert('✅ Mailer image(s) deleted!');
   };
 
+  // Delete master sheet entry (only allowed if no invoice generated)
+  const deleteMasterEntry = (rowId) => {
+    const row = masterData.find(r => r.id === rowId);
+    if (!row) return;
+    
+    // Safety check - don't allow deletion if invoice exists
+    if (row.invoiceNo || row.invoiceGenerated) {
+      alert('❌ Cannot delete entry with an existing invoice. Delete the invoice first.');
+      return;
+    }
+    
+    if (!window.confirm('🗑️ Are you sure you want to delete this entry?\n\nThis action cannot be undone.')) {
+      return;
+    }
+    
+    // Delete the entry from masterData
+    setMasterData(prev => prev.filter(r => r.id !== rowId));
+    
+    // Also delete any associated mailer images
+    setMailerImages(prev => {
+      const updated = { ...prev };
+      delete updated[rowId];
+      return updated;
+    });
+    
+    alert('✅ Entry deleted successfully!');
+  };
+
   const handlePaste = (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -3951,6 +3979,8 @@ ${generateInvoiceHtml(row)}
                                       <ActionButton icon={Eye} small onClick={() => downloadInvoice(row)} title="View Invoice" />
                                       {canEdit && <ActionButton icon={Trash2} small variant="danger" onClick={() => openDeleteConfirm(row)} title="Delete" />}
                                     </div>
+                                  ) : canEdit ? (
+                                    <ActionButton icon={Trash2} small variant="danger" onClick={() => deleteMasterEntry(row.id)} title="Delete Entry" />
                                   ) : <span style={{ color: '#CBD5E1' }}>-</span>}
                                 </td>
                                 
