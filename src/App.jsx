@@ -3914,6 +3914,8 @@ ${generateInvoiceHtml(row)}
                                         <button onClick={() => removeEmailFromRow(row.id, email)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#DC2626' }} title="Remove"><X size={12} /></button>
                                       </div>
                                     ))}
+                                    {row.cc1 && <div style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}><span style={{ fontWeight: '600' }}>CC1:</span> {row.cc1}</div>}
+                                    {row.cc2 && <div style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}><span style={{ fontWeight: '600' }}>CC2:</span> {row.cc2}</div>}
                                     <button onClick={() => { setSelectedRow(row); setNewEmailInput(''); setShowAddEmailModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#2874A6', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}><PlusCircle size={12} /> Add</button>
                                   </div>
                                 </td>
@@ -4718,6 +4720,8 @@ ${generateInvoiceHtml(row)}
                                       {canEdit && <button onClick={() => updateServiceField(row.id, 'additionalEmails', (row.additionalEmails || []).filter(e => e !== email))} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: '#DC2626' }} title="Remove"><X size={12} /></button>}
                                     </div>
                                   ))}
+                                  {row.cc1 && <div style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}><span style={{ fontWeight: '600' }}>CC1:</span> {row.cc1}</div>}
+                                  {row.cc2 && <div style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}><span style={{ fontWeight: '600' }}>CC2:</span> {row.cc2}</div>}
                                   {canEdit && <button onClick={() => { setSelectedRow(row); setNewEmailInput(''); setShowAddEmailModal(true); }} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#2874A6', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0' }}><PlusCircle size={12} /> Add</button>}
                                 </div>
                               </td>
