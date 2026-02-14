@@ -418,6 +418,9 @@ export default function FinanceApp() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [showCreditNoteModal, setShowCreditNoteModal] = useState(false);
   const [showClearDataModal, setShowClearDataModal] = useState(false);
+  const [showPOEditModal, setShowPOEditModal] = useState(false);
+  const [poEditForm, setPOEditForm] = useState({ poStatus: 'Without PO', poNumber: '', poDate: '' });
+  const [poEditTarget, setPOEditTarget] = useState(null); // { id, isService }
   const [selectedRow, setSelectedRow] = useState(null);
   const [emailMode, setEmailMode] = useState('reply');
   const [newEmailInput, setNewEmailInput] = useState('');
@@ -1641,7 +1644,18 @@ export default function FinanceApp() {
     if (row.additionalEmails && row.additionalEmails.length > 0) {
       emails.push(...row.additionalEmails);
     }
+    // Add CC1 and CC2 if present
+    if (row.cc1 && row.cc1.includes('@') && !emails.includes(row.cc1)) emails.push(row.cc1);
+    if (row.cc2 && row.cc2.includes('@') && !emails.includes(row.cc2)) emails.push(row.cc2);
     return emails;
+  };
+
+  // Get CC emails only (for display purposes)
+  const getCCEmails = (row) => {
+    const ccEmails = [];
+    if (row.cc1 && row.cc1.includes('@')) ccEmails.push(row.cc1);
+    if (row.cc2 && row.cc2.includes('@')) ccEmails.push(row.cc2);
+    return ccEmails;
   };
 
   const addEmailToRow = (rowId, email) => {
@@ -2803,6 +2817,10 @@ Phone: ${companyConfig.phone}`;
           poDateValue = poDateValue.toISOString().split('T')[0];
         }
         
+        // CC Email fields
+        const cc1 = (row['CC1'] || row['Cc1'] || row['cc1'] || '').toString().trim();
+        const cc2 = (row['CC2'] || row['Cc2'] || row['cc2'] || '').toString().trim();
+        
         // Create unique key for this campaign using: date, time, campaign name, and subject
         const campaignKey = `${dateStr}|${time}|${campaignName}|${subject}`.toLowerCase();
         
@@ -2843,7 +2861,9 @@ Phone: ${companyConfig.phone}`;
           editComments: '',
           poStatus: hasPO ? 'With PO' : 'Without PO',
           poNumber: hasPO ? poNumber : '',
-          poDate: hasPO ? poDateValue : ''
+          poDate: hasPO ? poDateValue : '',
+          cc1: cc1,
+          cc2: cc2
         };
       }).filter(row => row !== null); // Remove null entries (duplicates)
       
@@ -2995,6 +3015,38 @@ Phone: ${companyConfig.phone}`;
     if (status === 'Yes') {
       addNotification('info', `📧 Invoice ${row.invoiceNo} mailed to ${row.partyName}`, 'director');
     }
+  };
+
+  // Open PO Edit Modal
+  const openPOEditModal = (row, isService = false) => {
+    setPOEditTarget({ id: row.id, isService });
+    setPOEditForm({
+      poStatus: row.poStatus || 'Without PO',
+      poNumber: row.poNumber || '',
+      poDate: row.poDate || ''
+    });
+    setShowPOEditModal(true);
+  };
+
+  // Save PO Edit
+  const savePOEdit = () => {
+    if (!poEditTarget) return;
+    
+    const updateData = {
+      poStatus: poEditForm.poStatus,
+      poNumber: poEditForm.poStatus === 'With PO' ? poEditForm.poNumber : '',
+      poDate: poEditForm.poStatus === 'With PO' ? poEditForm.poDate : ''
+    };
+    
+    if (poEditTarget.isService) {
+      setServicesData(prev => prev.map(r => r.id === poEditTarget.id ? { ...r, ...updateData } : r));
+    } else {
+      setMasterData(prev => prev.map(r => r.id === poEditTarget.id ? { ...r, ...updateData } : r));
+    }
+    
+    setShowPOEditModal(false);
+    setPOEditTarget(null);
+    alert('✅ PO details updated!');
   };
 
   // ============================================
@@ -3883,12 +3935,17 @@ ${generateInvoiceHtml(row)}
                                 {/* PO Column */}
                                 <td style={{ padding: '10px 14px', textAlign: 'center' }}>
                                   {row.poStatus === 'With PO' ? (
-                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openPOEditModal(row, false)} title={canEdit ? 'Click to edit PO details' : ''}>
                                       <span style={{ color: '#22C55E', fontWeight: '600', fontSize: '10px' }}>✓ PO</span>
                                       <span style={{ fontSize: '9px', color: '#1E40AF', fontWeight: '600' }}>{row.poNumber}</span>
                                       {row.poDate && <span style={{ fontSize: '9px', color: '#64748B' }}>{formatDate(row.poDate)}</span>}
+                                      {canEdit && <span style={{ fontSize: '8px', color: '#94A3B8', textDecoration: 'underline' }}>Edit</span>}
                                     </div>
-                                  ) : <span style={{ color: '#CBD5E1', fontSize: '10px' }}>No PO</span>}
+                                  ) : (
+                                    <button onClick={() => canEdit && openPOEditModal(row, false)} disabled={!canEdit} style={{ color: canEdit ? '#2874A6' : '#CBD5E1', fontSize: '10px', background: 'none', border: 'none', cursor: canEdit ? 'pointer' : 'default', textDecoration: canEdit ? 'underline' : 'none' }}>
+                                      {canEdit ? '+ Add PO' : 'No PO'}
+                                    </button>
+                                  )}
                                 </td>
                                 
                                 <td style={{ padding: '10px 14px', textAlign: 'center' }}>
@@ -4106,6 +4163,10 @@ ${generateInvoiceHtml(row)}
           poDateValue = poDateValue.toISOString().split('T')[0];
         }
         
+        // CC Email fields
+        const cc1 = (row['CC1'] || row['Cc1'] || row['cc1'] || '').toString().trim();
+        const cc2 = (row['CC2'] || row['Cc2'] || row['cc2'] || '').toString().trim();
+        
         // Duplicate key
         const serviceKey = `${dateStr}|${partyName}|${serviceType}`.toLowerCase();
         
@@ -4142,7 +4203,9 @@ ${generateInvoiceHtml(row)}
           isService: true,
           poStatus: hasPO ? 'With PO' : 'Without PO',
           poNumber: hasPO ? poNumber : '',
-          poDate: hasPO ? poDateValue : ''
+          poDate: hasPO ? poDateValue : '',
+          cc1: cc1,
+          cc2: cc2
         };
       }).filter(row => row !== null);
       
@@ -4679,12 +4742,17 @@ ${generateInvoiceHtml(row)}
                               {/* PO Column */}
                               <td style={{ padding: '10px 8px', textAlign: 'center' }}>
                                 {row.poStatus === 'With PO' ? (
-                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px', cursor: canEdit ? 'pointer' : 'default' }} onClick={() => canEdit && openPOEditModal(row, true)} title={canEdit ? 'Click to edit PO details' : ''}>
                                     <span style={{ color: '#22C55E', fontWeight: '600', fontSize: '10px' }}>✓ PO</span>
                                     <span style={{ fontSize: '9px', color: '#1E40AF', fontWeight: '600' }}>{row.poNumber}</span>
                                     {row.poDate && <span style={{ fontSize: '9px', color: '#64748B' }}>{formatDate(row.poDate)}</span>}
+                                    {canEdit && <span style={{ fontSize: '8px', color: '#94A3B8', textDecoration: 'underline' }}>Edit</span>}
                                   </div>
-                                ) : <span style={{ color: '#CBD5E1', fontSize: '10px' }}>No PO</span>}
+                                ) : (
+                                  <button onClick={() => canEdit && openPOEditModal(row, true)} disabled={!canEdit} style={{ color: canEdit ? '#2874A6' : '#CBD5E1', fontSize: '10px', background: 'none', border: 'none', cursor: canEdit ? 'pointer' : 'default', textDecoration: canEdit ? 'underline' : 'none' }}>
+                                    {canEdit ? '+ Add PO' : 'No PO'}
+                                  </button>
+                                )}
                               </td>
                               
                               {/* To Bill */}
@@ -8957,9 +9025,14 @@ ${generateInvoiceHtml(row)}
               )}
               <div style={{ fontSize: '14px', marginTop: '8px' }}><strong>Recipients:</strong></div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
-                {getAllEmails(selectedRow).map((email, i) => (
-                  <span key={i} style={{ padding: '4px 10px', backgroundColor: '#DBEAFE', borderRadius: '6px', fontSize: '13px', color: '#1E40AF' }}>{email}</span>
-                ))}
+                {getAllEmails(selectedRow).map((email, i) => {
+                  const isCC = getCCEmails(selectedRow).includes(email);
+                  return (
+                    <span key={i} style={{ padding: '4px 10px', backgroundColor: isCC ? '#FEF3C7' : '#DBEAFE', borderRadius: '6px', fontSize: '13px', color: isCC ? '#92400E' : '#1E40AF' }}>
+                      {isCC && <span style={{ fontSize: '10px', marginRight: '4px' }}>CC:</span>}{email}
+                    </span>
+                  );
+                })}
                 {getAllEmails(selectedRow).length === 0 && <span style={{ color: '#94A3B8' }}>No email addresses</span>}
               </div>
             </div>
@@ -9265,7 +9338,22 @@ ${generateInvoiceHtml(row)}
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Invoice:</strong> {selectedInvoiceForFollowup.invoiceNo}</div>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Party:</strong> {selectedInvoiceForFollowup.partyName}</div>
               <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Amount:</strong> {formatCurrency(selectedInvoiceForFollowup.invoiceTotalAmount || selectedInvoiceForFollowup.totalAmount)}</div>
-              <div style={{ fontSize: '14px' }}><strong>Invoice Date:</strong> {formatDate(selectedInvoiceForFollowup.invoiceDate || selectedInvoiceForFollowup.date)}</div>
+              <div style={{ fontSize: '14px', marginBottom: '4px' }}><strong>Invoice Date:</strong> {formatDate(selectedInvoiceForFollowup.invoiceDate || selectedInvoiceForFollowup.date)}</div>
+              {getAllEmails(selectedInvoiceForFollowup).length > 0 && (
+                <div style={{ marginTop: '8px' }}>
+                  <div style={{ fontSize: '13px', fontWeight: '600', color: '#1E40AF', marginBottom: '4px' }}>📧 Contact Emails:</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    {getAllEmails(selectedInvoiceForFollowup).map((email, i) => {
+                      const isCC = getCCEmails(selectedInvoiceForFollowup).includes(email);
+                      return (
+                        <span key={i} style={{ padding: '3px 8px', backgroundColor: isCC ? '#FEF3C7' : '#DBEAFE', borderRadius: '4px', fontSize: '11px', color: isCC ? '#92400E' : '#1E40AF' }}>
+                          {isCC && <span style={{ fontSize: '9px', marginRight: '3px' }}>CC:</span>}{email}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
             
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
@@ -9311,6 +9399,53 @@ ${generateInvoiceHtml(row)}
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* PO Edit Modal */}
+      <Modal isOpen={showPOEditModal} onClose={() => { setShowPOEditModal(false); setPOEditTarget(null); }} title="📋 Edit PO Details" width="400px">
+        <div>
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>PO Status</label>
+            <select
+              value={poEditForm.poStatus}
+              onChange={(e) => setPOEditForm({ ...poEditForm, poStatus: e.target.value })}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '13px' }}
+            >
+              <option value="Without PO">Without PO</option>
+              <option value="With PO">With PO</option>
+            </select>
+          </div>
+          
+          {poEditForm.poStatus === 'With PO' && (
+            <>
+              <div style={{ marginBottom: '12px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>PO Number *</label>
+                <input
+                  type="text"
+                  value={poEditForm.poNumber}
+                  onChange={(e) => setPOEditForm({ ...poEditForm, poNumber: e.target.value })}
+                  placeholder="Enter PO number"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+              </div>
+              
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: '600', color: '#374151', marginBottom: '6px' }}>PO Date</label>
+                <input
+                  type="date"
+                  value={poEditForm.poDate}
+                  onChange={(e) => setPOEditForm({ ...poEditForm, poDate: e.target.value })}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1.5px solid #D1D5DB', fontSize: '13px', boxSizing: 'border-box' }}
+                />
+              </div>
+            </>
+          )}
+          
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <ActionButton label="Cancel" onClick={() => { setShowPOEditModal(false); setPOEditTarget(null); }} />
+            <ActionButton label="Save" variant="brand" onClick={savePOEdit} />
+          </div>
+        </div>
       </Modal>
 
       {/* Clear Data Confirmation Modal */}
