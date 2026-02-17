@@ -3406,7 +3406,9 @@ ${companyConfig.email}`;
         </div>
         <div style="flex: 1; font-size: 12px;">
           <div style="display: flex; border-bottom: 1px solid #000;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Invoice No.</div><div style="flex: 1; padding: 8px; font-weight: 600; color: #1a5276;">${row.invoiceNo || ''}</div></div>
-          <div style="display: flex;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Dated</div><div style="flex: 1; padding: 8px;">${formatDate(row.invoiceDate || row.date)}</div></div>
+          <div style="display: flex;${row.poNumber ? ' border-bottom: 1px solid #000;' : ''}"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">Dated</div><div style="flex: 1; padding: 8px;">${formatDate(row.invoiceDate || row.date)}</div></div>
+          ${row.poNumber ? `<div style="display: flex;${row.poDate ? ' border-bottom: 1px solid #000;' : ''}"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">PO No.</div><div style="flex: 1; padding: 8px; font-weight: 600; color: #166534;">${row.poNumber}</div></div>` : ''}
+          ${row.poNumber && row.poDate ? `<div style="display: flex;"><div style="flex: 1; padding: 8px; border-right: 1px solid #000; font-weight: bold; background: #f5f5f5;">PO Date</div><div style="flex: 1; padding: 8px;">${formatDate(row.poDate)}</div></div>` : ''}
         </div>
       </div>
       <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
