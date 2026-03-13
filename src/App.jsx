@@ -4991,6 +4991,51 @@ ${generateInvoiceHtml(row)}
       if (key && !cnMap.has(key)) cnMap.set(key, { ...cn, isHistoricalCN: true });
     });
     
+    // Build a map of historical ledger entries by invoice number for quick lookup
+    const historicalLedgerMap = new Map();
+    safeLedgerEntries.filter(e => e.isHistorical).forEach(entry => {
+      if (entry.vchNo) {
+        historicalLedgerMap.set(entry.vchNo, entry);
+      }
+    });
+    
+    // Helper to extract GST from historical ledger entry subRows
+    const extractGstFromHistorical = (invoiceNo, totalAmount) => {
+      const entry = historicalLedgerMap.get(invoiceNo);
+      let cgst = 0, sgst = 0, igst = 0, baseAmount = 0;
+      
+      if (entry && entry.subRows && entry.subRows.length > 0) {
+        entry.subRows.forEach(sub => {
+          const particular = (sub.particular || '').toUpperCase();
+          const amount = parseFloat(sub.credit || sub.debit) || 0;
+          
+          if (particular.includes('CGST')) {
+            cgst = amount;
+          } else if (particular.includes('SGST')) {
+            sgst = amount;
+          } else if (particular.includes('IGST')) {
+            igst = amount;
+          } else if (particular.includes('PROMOTIONAL') || particular.includes('EMAILER') || particular.includes('SERVICE')) {
+            baseAmount = amount;
+          }
+        });
+      }
+      
+      // If we found GST but not base amount, calculate it
+      if ((cgst > 0 || sgst > 0 || igst > 0) && baseAmount === 0) {
+        baseAmount = totalAmount - cgst - sgst - igst;
+      }
+      
+      // If we didn't find any GST info in subRows, try to calculate from total
+      // Assume 18% GST and reverse calculate
+      if (cgst === 0 && sgst === 0 && igst === 0 && totalAmount > 0) {
+        // Can't determine if CGST/SGST or IGST without state info
+        // Leave as 0 - user can see it's historical without GST breakdown
+      }
+      
+      return { cgst, sgst, igst, baseAmount };
+    };
+    
     // Group by party like in UI
     const groupedByParty = {};
     invoices.forEach(inv => {
@@ -5026,12 +5071,24 @@ ${generateInvoiceHtml(row)}
         // Get party GSTIN
         const partyGstin = getPartyGstin(party, inv.statePartyDetails);
         
-        // Get GST amounts from the invoice or calculate
-        const baseAmount = parseFloat(inv.invoiceAmount || inv.campaigns?.[0]?.invoiceAmount) || 0;
-        const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
-        const cgstAmount = parseFloat(inv.cgst || inv.campaigns?.[0]?.cgst) || (isSameState ? baseAmount * 0.09 : 0);
-        const sgstAmount = parseFloat(inv.sgst || inv.campaigns?.[0]?.sgst) || (isSameState ? baseAmount * 0.09 : 0);
-        const igstAmount = parseFloat(inv.igst || inv.campaigns?.[0]?.igst) || (!isSameState ? baseAmount * 0.18 : 0);
+        // Get GST amounts - different logic for historical vs regular invoices
+        let baseAmount, cgstAmount, sgstAmount, igstAmount;
+        
+        if (inv.isHistorical) {
+          // For historical invoices, extract GST from ledger subRows
+          const gstInfo = extractGstFromHistorical(inv.invoiceNo, inv.totalAmount);
+          cgstAmount = gstInfo.cgst;
+          sgstAmount = gstInfo.sgst;
+          igstAmount = gstInfo.igst;
+          baseAmount = gstInfo.baseAmount || (inv.totalAmount - cgstAmount - sgstAmount - igstAmount);
+        } else {
+          // For regular invoices, get from invoice data or calculate
+          baseAmount = parseFloat(inv.invoiceAmount || inv.campaigns?.[0]?.invoiceAmount) || 0;
+          const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          cgstAmount = parseFloat(inv.cgst || inv.campaigns?.[0]?.cgst) || (isSameState ? baseAmount * 0.09 : 0);
+          sgstAmount = parseFloat(inv.sgst || inv.campaigns?.[0]?.sgst) || (isSameState ? baseAmount * 0.09 : 0);
+          igstAmount = parseFloat(inv.igst || inv.campaigns?.[0]?.igst) || (!isSameState ? baseAmount * 0.18 : 0);
+        }
         
         exportData.push({
           'Client Code': inv.clientCode || '',
