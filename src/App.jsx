@@ -5023,19 +5023,31 @@ ${generateInvoiceHtml(row)}
           receiptStatus = 'Partial';
         }
         
-        // Build PO? column - if With PO, show PO Number and Date
-        let poColumn = inv.poStatus === 'With PO' 
-          ? `${inv.poNumber || ''}${inv.poDate ? '\n' + formatDate(inv.poDate) : ''}`
-          : 'Without PO';
+        // Get party GSTIN
+        const partyGstin = getPartyGstin(party, inv.statePartyDetails);
+        
+        // Get GST amounts from the invoice or calculate
+        const baseAmount = parseFloat(inv.invoiceAmount || inv.campaigns?.[0]?.invoiceAmount) || 0;
+        const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const cgstAmount = parseFloat(inv.cgst || inv.campaigns?.[0]?.cgst) || (isSameState ? baseAmount * 0.09 : 0);
+        const sgstAmount = parseFloat(inv.sgst || inv.campaigns?.[0]?.sgst) || (isSameState ? baseAmount * 0.09 : 0);
+        const igstAmount = parseFloat(inv.igst || inv.campaigns?.[0]?.igst) || (!isSameState ? baseAmount * 0.18 : 0);
         
         exportData.push({
           'Client Code': inv.clientCode || '',
           'Party Name': party,
+          'GST No': partyGstin || '',
           'Invoice No': inv.invoiceNo,
           'Date': formatDate(inv.date),
           'Type': inv.isService ? 'Service' : (inv.invoiceType || 'Individual'),
-          'PO?': poColumn,
-          'Amount': inv.totalAmount,
+          'PO Status': inv.poStatus || 'Without PO',
+          'PO Number': inv.poNumber || '',
+          'PO Date': inv.poDate ? formatDate(inv.poDate) : '',
+          'Base Amount': baseAmount || '',
+          'CGST': cgstAmount || '',
+          'SGST': sgstAmount || '',
+          'IGST': igstAmount || '',
+          'Total Amount': inv.totalAmount,
           'Received': totalReceived || '',
           'TDS': totalTds || '',
           'CN Amount': cnAmount || '',
@@ -5049,6 +5061,33 @@ ${generateInvoiceHtml(row)}
     });
     
     const ws = XLSX.utils.json_to_sheet(exportData);
+    
+    // Set column widths
+    ws['!cols'] = [
+      { wch: 12 }, // Client Code
+      { wch: 30 }, // Party Name
+      { wch: 18 }, // GST No
+      { wch: 18 }, // Invoice No
+      { wch: 12 }, // Date
+      { wch: 10 }, // Type
+      { wch: 12 }, // PO Status
+      { wch: 15 }, // PO Number
+      { wch: 12 }, // PO Date
+      { wch: 12 }, // Base Amount
+      { wch: 10 }, // CGST
+      { wch: 10 }, // SGST
+      { wch: 10 }, // IGST
+      { wch: 12 }, // Total Amount
+      { wch: 12 }, // Received
+      { wch: 10 }, // TDS
+      { wch: 10 }, // CN Amount
+      { wch: 12 }, // Balance
+      { wch: 12 }, // Invoice Status
+      { wch: 12 }, // Receipt Status
+      { wch: 15 }, // Receipt No
+      { wch: 15 }  // CN No
+    ];
+    
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Invoice Register');
     XLSX.writeFile(wb, `Invoice_Register_${new Date().toISOString().split('T')[0]}.xlsx`);
