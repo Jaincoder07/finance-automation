@@ -5819,7 +5819,7 @@ ${generateInvoiceHtml(row)}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>🧾 Invoice & Receipt Register</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={() => exportInvoiceRegisterToExcel(invoices)} />
+            {canEdit && <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={() => exportInvoiceRegisterToExcel(invoices)} />}
             {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
           </div>
         </div>
@@ -6779,7 +6779,7 @@ ${generateInvoiceHtml(row)}
             <h1 style={{ fontSize: '22px', fontWeight: '700', color: '#1E293B', marginBottom: '4px' }}>🧾 Receipt Register</h1>
             <p style={{ fontSize: '13px', color: '#64748B' }}>All receipts, TDS, and credit notes</p>
           </div>
-          <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={exportReceiptRegisterToExcel} />
+          {canEdit && <ActionButton icon={Download} label="Export Excel" variant="secondary" onClick={exportReceiptRegisterToExcel} />}
         </div>
         
         {/* Filters */}
@@ -7697,7 +7697,7 @@ ${generateInvoiceHtml(row)}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
           <h1 style={{ margin: 0, fontSize: '24px', fontWeight: '700', color: '#1E293B' }}>📚 Party Ledgers</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-            <ActionButton icon={Download} label="Export All" variant="secondary" onClick={exportAllLedgersToExcel} />
+            {canEdit && <ActionButton icon={Download} label="Export All" variant="secondary" onClick={exportAllLedgersToExcel} />}
             {isDirector && <span style={{ padding: '8px 16px', backgroundColor: '#FEF3C7', borderRadius: '8px', fontSize: '13px', color: '#92400E', fontWeight: '600' }}>👁️ View Only</span>}
             {canEdit && <ActionButton icon={Upload} label="Import Historical" variant="brand" onClick={() => setShowHistoricalLedgerModal(true)} />}
             {canEdit && selectedParty && ledgerEntries.some(e => matchParty(e.partyName, selectedParty) && e.isHistorical) && (
@@ -7730,7 +7730,7 @@ ${generateInvoiceHtml(row)}
               />
             </div>
             <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px' }}>
-              {selectedParty && (
+              {selectedParty && canEdit && (
                 <ActionButton icon={Download} label="Download PDF" variant="brand" onClick={generateLedgerPDF} />
               )}
             </div>
