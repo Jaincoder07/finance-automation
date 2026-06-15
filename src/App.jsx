@@ -604,6 +604,31 @@ export default function FinanceApp() {
 
   // Get party GSTIN by matching party name and state
   // Get party GSTIN by matching party name and state (CASE-INSENSITIVE)
+  // GST state code → state name mapping (first 2 digits of GSTIN)
+  const GST_STATE_CODES = {
+    '01': 'Jammu and Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh',
+    '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan', '09': 'Uttar Pradesh',
+    '10': 'Bihar', '11': 'Sikkim', '12': 'Arunachal Pradesh', '13': 'Nagaland', '14': 'Manipur',
+    '15': 'Mizoram', '16': 'Tripura', '17': 'Meghalaya', '18': 'Assam', '19': 'West Bengal',
+    '20': 'Jharkhand', '21': 'Odisha', '22': 'Chhattisgarh', '23': 'Madhya Pradesh', '24': 'Gujarat',
+    '25': 'Daman and Diu', '26': 'Dadra and Nagar Haveli', '27': 'Maharashtra', '28': 'Andhra Pradesh',
+    '29': 'Karnataka', '30': 'Goa', '31': 'Lakshadweep', '32': 'Kerala', '33': 'Tamil Nadu',
+    '34': 'Puducherry', '35': 'Andaman and Nicobar Islands', '36': 'Telangana', '37': 'Andhra Pradesh',
+    '38': 'Ladakh'
+  };
+
+  // Derive the state NAME from a GSTIN (authoritative source for Place of Supply)
+  const getStateFromGstin = useCallback((gstin) => {
+    if (!gstin || gstin.length < 2) return '';
+    return GST_STATE_CODES[gstin.substring(0, 2)] || '';
+  }, []);
+
+  // Get the 2-digit state code from a GSTIN
+  const getStateCodeFromGstin = useCallback((gstin) => {
+    if (!gstin || gstin.length < 2) return '';
+    return gstin.substring(0, 2);
+  }, []);
+
   const getPartyGstin = useCallback((partyName, stateDetails) => {
     if (!partyName) return '';
     const normalizedState = normalizeStateName(stateDetails);
@@ -726,6 +751,27 @@ export default function FinanceApp() {
     
     return null;
   }, [safePartyMaster]);
+
+  // Resolve the authoritative GSTIN for an invoice row.
+  // For vendors with multiple GSTINs, the Client Code is the only reliable key
+  // (each GSTIN/state has its own Client Code), so resolve via Client Code first.
+  const getRowGstin = useCallback((row) => {
+    if (!row) return '';
+    const rowClientCode = row.clientCode || getClientCode(row.partyName, row.statePartyDetails);
+    if (rowClientCode) {
+      const p = getPartyByClientCode(rowClientCode);
+      if (p?.gstin) return p.gstin;
+    }
+    return getPartyGstin(row.partyName, row.statePartyDetails);
+  }, [getClientCode, getPartyByClientCode, getPartyGstin]);
+
+  // Same-state (CGST+SGST) vs inter-state (IGST) based on a row's authoritative GSTIN.
+  const isRowSameState = useCallback((row) => {
+    const gstin = getRowGstin(row);
+    const code = getStateCodeFromGstin(gstin);
+    if (code) return code === companyConfig.stateCode;
+    return row?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA') || false;
+  }, [getRowGstin, getStateCodeFromGstin, companyConfig.stateCode]);
 
   // ============================================
   // FIREBASE DATA PERSISTENCE
@@ -2012,7 +2058,7 @@ export default function FinanceApp() {
     const totalCredit = creditAmount + gstAmount;
     
     // Determine GST type based on state
-    const isSameState = selectedRow.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+    const isSameState = isRowSameState(selectedRow);
     const gstType = isSameState ? 'CGST/SGST' : 'IGST';
     
     const newCreditNote = {
@@ -2958,7 +3004,7 @@ Phone: ${companyConfig.phone}`;
   
   const calculateGst = (row) => {
     const amount = parseFloat(row.invoiceAmount) || 0;
-    const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+    const isSameState = isRowSameState(row);
     if (isSameState) {
       const cgst = amount * 0.09;
       const sgst = amount * 0.09;
@@ -3315,12 +3361,16 @@ ${companyConfig.email}`;
       totalAmount = campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
     }
     
-    // Get party GSTIN by matching party name AND state
-    const partyGstin = getPartyGstin(row.partyName, row.statePartyDetails);
+    // Get party GSTIN — resolve via Client Code first (reliable for multi-GSTIN vendors)
+    const partyGstin = getRowGstin(row);
     // Get party address from Party Master
     const partyAddress = getPartyAddressFromMaster(row.partyName, row.statePartyDetails);
     
-    const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+    // Determine Place of Supply from the party's GSTIN (authoritative source).
+    // Fall back to statePartyDetails only if GSTIN is missing/unmappable.
+    const placeOfSupply = getStateFromGstin(partyGstin) || row.statePartyDetails || companyConfig.stateName;
+    // Same-state (CGST+SGST) vs inter-state (IGST) decided by the party's GSTIN.
+    const isSameState = isRowSameState(row);
     const cgst = isSameState ? totalAmount * 0.09 : 0;
     const sgst = isSameState ? totalAmount * 0.09 : 0;
     const igst = isSameState ? 0 : totalAmount * 0.18;
@@ -3414,7 +3464,7 @@ ${companyConfig.email}`;
       <div style="padding: 10px 12px; border-bottom: 2px solid #000; background: #fafafa;">
         <div style="font-size: 11px; color: #666; margin-bottom: 3px;">Buyer (Bill to)</div>
         <div style="font-size: 14px; font-weight: bold; margin-bottom: 4px; color: #1a5276;">${row.partyName}</div>
-        <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${row.statePartyDetails || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${row.statePartyDetails || companyConfig.stateName}</div>
+        <div style="font-size: 11px; color: #333;">${partyAddress ? partyAddress + '<br>' : ''}${row.statePartyDetails || ''}${partyGstin ? '<br><strong>GSTIN/UIN:</strong> ' + partyGstin : ''}<br>Place of Supply: ${placeOfSupply}</div>
       </div>
       <table style="width: 100%; border-collapse: collapse;">
         <thead><tr style="background: #e8e8e8;"><th style="border: 1px solid #000; padding: 10px; width: 45px; font-size: 12px;">Sl No.</th><th style="border: 1px solid #000; padding: 10px; font-size: 12px;">Particulars</th><th style="border: 1px solid #000; padding: 10px; width: 80px; font-size: 12px;">HSN/SAC</th><th style="border: 1px solid #000; padding: 10px; width: 100px; text-align: right; font-size: 12px;">Amount</th></tr></thead>
@@ -4386,7 +4436,7 @@ ${generateInvoiceHtml(row)}
     const invoiceNo = `${companyConfig.invoicePrefix}${nextInvoiceNo}`;
     const invoiceDate = new Date().toISOString().split('T')[0];
     
-    const isSameState = row.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+    const isSameState = isRowSameState(row);
     const baseAmount = parseFloat(row.invoiceAmount);
     const cgst = isSameState ? baseAmount * 0.09 : 0;
     const sgst = isSameState ? baseAmount * 0.09 : 0;
@@ -5069,7 +5119,7 @@ ${generateInvoiceHtml(row)}
         }
         
         // Get party GSTIN
-        const partyGstin = getPartyGstin(party, inv.statePartyDetails);
+        const partyGstin = getRowGstin(inv) || getPartyGstin(party, inv.statePartyDetails);
         
         // Get GST amounts - different logic for historical vs regular invoices
         let baseAmount, cgstAmount, sgstAmount, igstAmount;
@@ -5084,7 +5134,7 @@ ${generateInvoiceHtml(row)}
         } else {
           // For regular invoices, get from invoice data or calculate
           baseAmount = parseFloat(inv.invoiceAmount || inv.campaigns?.[0]?.invoiceAmount) || 0;
-          const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const isSameState = isRowSameState(inv);
           cgstAmount = parseFloat(inv.cgst || inv.campaigns?.[0]?.cgst) || (isSameState ? baseAmount * 0.09 : 0);
           sgstAmount = parseFloat(inv.sgst || inv.campaigns?.[0]?.sgst) || (isSameState ? baseAmount * 0.09 : 0);
           igstAmount = parseFloat(inv.igst || inv.campaigns?.[0]?.igst) || (!isSameState ? baseAmount * 0.18 : 0);
@@ -5353,7 +5403,7 @@ ${generateInvoiceHtml(row)}
           const inv = entry;
           // Calculate amounts
           const baseAmount = inv.campaigns.reduce((sum, c) => sum + (parseFloat(c.invoiceAmount) || 0), 0);
-          const isSameState = inv.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const isSameState = isRowSameState(inv);
           const cgst = isSameState ? baseAmount * 0.09 : 0;
           const sgst = isSameState ? baseAmount * 0.09 : 0;
           const igst = isSameState ? 0 : baseAmount * 0.18;
@@ -6171,7 +6221,7 @@ ${generateInvoiceHtml(row)}
       r.invoiceGenerated && 
       r.invoiceStatus === 'Approved' &&
       matchesClientCode(r) &&
-      (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
+      (selectedPartyClientCode || !selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
     );
     
     // Get service invoices (STATE-AWARE + CLIENT CODE AWARE)
@@ -6180,7 +6230,7 @@ ${generateInvoiceHtml(row)}
       r.invoiceGenerated && 
       r.invoiceStatus === 'Approved' &&
       matchesClientCode(r) &&
-      (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
+      (selectedPartyClientCode || !selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
     );
     
     const invoiceMap = new Map();
@@ -6323,7 +6373,7 @@ ${generateInvoiceHtml(row)}
         let baseAmount = 0;
         inv.campaigns.forEach(c => baseAmount += parseFloat(c.invoiceAmount) || 0);
         
-        const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const isSameState = isRowSameState(inv.campaigns[0] || inv);
         const cgst = isSameState ? baseAmount * 0.09 : 0;
         const sgst = isSameState ? baseAmount * 0.09 : 0;
         const igst = isSameState ? 0 : baseAmount * 0.18;
@@ -6411,7 +6461,7 @@ ${generateInvoiceHtml(row)}
         const baseAmount = parseFloat(campaign.invoiceAmount) || 0;
         const serviceType = inv.serviceType || campaign.serviceType || 'SERVICE';
         
-        const isSameState = campaign.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+        const isSameState = isRowSameState(campaign);
         const cgst = isSameState ? baseAmount * 0.09 : 0;
         const sgst = isSameState ? baseAmount * 0.09 : 0;
         const igst = isSameState ? 0 : baseAmount * 0.18;
@@ -6933,7 +6983,7 @@ ${generateInvoiceHtml(row)}
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
         matchesClientCode(r) &&
-        (!partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
+        (partyClientCode || !partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
       );
       
       // Get all service invoices for this party+state (Client Code aware)
@@ -6942,7 +6992,7 @@ ${generateInvoiceHtml(row)}
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
         matchesClientCode(r) &&
-        (!partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
+        (partyClientCode || !partyNormalizedState || normalizeStateName(r.statePartyDetails) === partyNormalizedState)
       );
       
       // Group by invoice number
@@ -7179,7 +7229,7 @@ ${generateInvoiceHtml(row)}
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
         matchesClientCode(r) &&
-        (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
+        (selectedPartyClientCode || !selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
       );
       
       // Get service invoices for this party+state (CLIENT CODE AWARE)
@@ -7188,7 +7238,7 @@ ${generateInvoiceHtml(row)}
         r.invoiceGenerated && 
         r.invoiceStatus === 'Approved' &&
         matchesClientCode(r) &&
-        (!selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
+        (selectedPartyClientCode || !selectedPartyState || normalizeStateName(r.statePartyDetails) === selectedPartyState)
       );
       
       // Group by invoice number
@@ -7349,7 +7399,7 @@ ${generateInvoiceHtml(row)}
             baseAmount += parseFloat(c.invoiceAmount) || 0;
           });
           
-          const isSameState = inv.campaigns[0]?.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const isSameState = isRowSameState(inv.campaigns[0] || inv);
           const cgst = isSameState ? baseAmount * 0.09 : 0;
           const sgst = isSameState ? baseAmount * 0.09 : 0;
           const igst = isSameState ? 0 : baseAmount * 0.18;
@@ -7481,7 +7531,7 @@ ${generateInvoiceHtml(row)}
           const baseAmount = parseFloat(campaign.invoiceAmount) || 0;
           const serviceType = inv.serviceType || campaign.serviceType || 'SERVICE';
           
-          const isSameState = campaign.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const isSameState = isRowSameState(campaign);
           const cgst = isSameState ? baseAmount * 0.09 : 0;
           const sgst = isSameState ? baseAmount * 0.09 : 0;
           const igst = isSameState ? 0 : baseAmount * 0.18;
@@ -9380,7 +9430,7 @@ ${generateInvoiceHtml(row)}
       {/* Credit Note Modal */}
       <Modal isOpen={showCreditNoteModal} onClose={() => { setShowCreditNoteModal(false); setCreditNoteForm({ amount: '', gst: '', reason: '', date: new Date().toISOString().split('T')[0] }); }} title="📝 Create Credit Note" width="500px">
         {selectedRow && (() => {
-          const isSameState = selectedRow.statePartyDetails?.toUpperCase().includes('MAHARASHTRA');
+          const isSameState = isRowSameState(selectedRow);
           const gstLabel = isSameState ? 'CGST + SGST (9% + 9%)' : 'IGST (18%)';
           const baseAmount = parseFloat(creditNoteForm.amount) || 0;
           const gstAmount = parseFloat(creditNoteForm.gst) || 0;
