@@ -780,6 +780,7 @@ export default function FinanceApp() {
   // Ref to track if update is from server (to avoid save loop)
   const isReceivingUpdateRef = useRef(false);
   const unsubscribeRef = useRef(null);
+  const lastSaveTimestampRef = useRef(null); // tracks our own last save to ignore its listener echo
   
   // Load data from Firebase on login
   const loadDataFromFirebase = async () => {
@@ -873,7 +874,7 @@ export default function FinanceApp() {
       // NOTE: mailerImages and mailerLogo are NOT included here
       // They are saved separately to their own Firestore collections
       // to avoid the 1MB document size limit
-      await saveAppState('indreesh-media', {
+      const savedTs = await saveAppState('indreesh-media', {
         masterData,
         servicesData,
         ledgerEntries,
@@ -895,6 +896,7 @@ export default function FinanceApp() {
         followups,
         userPasswords
       });
+      if (savedTs) lastSaveTimestampRef.current = savedTs;
       setLastSaved(new Date());
       console.log('✅ App state saved to Firebase');
     } catch (error) {
@@ -1195,6 +1197,13 @@ export default function FinanceApp() {
     // Set up real-time listener
     unsubscribeRef.current = subscribeToAppState('indreesh-media', (data) => {
       if (!data) return;
+      
+      // Ignore the echo of our OWN save. When we write, Firestore fires this
+      // listener back with the same data; processing it can overwrite fresh
+      // local state (e.g. a just-uploaded ledger mid-save). Skip if timestamps match.
+      if (data.updatedAt && data.updatedAt === lastSaveTimestampRef.current) {
+        return;
+      }
       
       // Debug: Log what data we're receiving from Firebase
       console.log('Firebase data received:', {

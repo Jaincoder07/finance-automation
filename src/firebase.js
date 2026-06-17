@@ -213,33 +213,34 @@ export const loadMailerLogo = async (userId) => {
 // ============================================
 
 export const saveAppState = async (userId, state) => {
-  try {
-    // Build the state object WITHOUT images and logo (they're stored separately)
-    const stateToSave = {
-      masterData: state.masterData || [],
-      servicesData: state.servicesData || [],
-      ledgerEntries: state.ledgerEntries || [],
-      receipts: state.receipts || [],
-      creditNotes: state.creditNotes || [],
-      openingBalances: state.openingBalances || {},
-      // DO NOT include mailerImages here - stored separately!
-      // DO NOT include mailerLogo here - stored separately!
-      companyConfig: state.companyConfig || {},
-      nextInvoiceNo: state.nextInvoiceNo || 1,
-      nextCombineNo: state.nextCombineNo || 1,
-      nextReceiptNo: state.nextReceiptNo || 1,
-      nextCreditNoteNo: state.nextCreditNoteNo || 1,
-      nextServiceInvoiceNo: state.nextServiceInvoiceNo || 1,
-      invoiceValues: state.invoiceValues || {},
-      notifications: state.notifications || [],
-      emailSettings: state.emailSettings || {},
-      whatsappSettings: state.whatsappSettings || {},
-      partyMaster: state.partyMaster || {},
-      followups: state.followups || [],
-      userPasswords: state.userPasswords || {},
-      updatedAt: new Date().toISOString()
-    };
+  const updatedAt = new Date().toISOString();
+  // Build the state object WITHOUT images and logo (they're stored separately)
+  const stateToSave = {
+    masterData: state.masterData || [],
+    servicesData: state.servicesData || [],
+    ledgerEntries: state.ledgerEntries || [],
+    receipts: state.receipts || [],
+    creditNotes: state.creditNotes || [],
+    openingBalances: state.openingBalances || {},
+    // DO NOT include mailerImages here - stored separately!
+    // DO NOT include mailerLogo here - stored separately!
+    companyConfig: state.companyConfig || {},
+    nextInvoiceNo: state.nextInvoiceNo || 1,
+    nextCombineNo: state.nextCombineNo || 1,
+    nextReceiptNo: state.nextReceiptNo || 1,
+    nextCreditNoteNo: state.nextCreditNoteNo || 1,
+    nextServiceInvoiceNo: state.nextServiceInvoiceNo || 1,
+    invoiceValues: state.invoiceValues || {},
+    notifications: state.notifications || [],
+    emailSettings: state.emailSettings || {},
+    whatsappSettings: state.whatsappSettings || {},
+    partyMaster: state.partyMaster || {},
+    followups: state.followups || [],
+    userPasswords: state.userPasswords || {},
+    updatedAt
+  };
 
+  try {
     // Check estimated size before saving
     const stateStr = JSON.stringify(stateToSave);
     const estimatedSize = new Blob([stateStr]).size;
@@ -249,18 +250,19 @@ export const saveAppState = async (userId, state) => {
       console.warn(`State size is ${(estimatedSize / 1024).toFixed(0)}KB - splitting into chunks`);
       await saveAppStateChunked(userId, stateToSave);
     } else {
+      // Not chunked: ensure any stale chunk2 doc doesn't shadow this save on load
       await setDoc(doc(db, "appState", userId), stateToSave);
     }
 
-    return true;
+    return updatedAt;
   } catch (error) {
     console.error("Error saving app state:", error);
     // If save fails due to size, try chunked save
     if (error.code === 'invalid-argument' || error.message?.includes('exceeds the maximum')) {
       console.warn("Document too large, falling back to chunked save...");
       try {
-        await saveAppStateChunked(userId, state);
-        return true;
+        await saveAppStateChunked(userId, stateToSave);
+        return updatedAt;
       } catch (chunkError) {
         console.error("Chunked save also failed:", chunkError);
       }
@@ -269,9 +271,12 @@ export const saveAppState = async (userId, state) => {
   }
 };
 
-// Chunked save for when main state exceeds 1MB
+// Chunked save for when main state exceeds 1MB.
+// IMPORTANT: chunk2 (which holds ledgerEntries, receipts, etc.) is written FIRST,
+// so that when the main-document write triggers the real-time listener, chunk2 is
+// already up to date. Writing chunk1 first caused a race where the listener read a
+// stale chunk2 and overwrote freshly-saved data (e.g. just-uploaded ledgers).
 const saveAppStateChunked = async (userId, state) => {
-  // Split large arrays across multiple documents
   const chunk1 = {
     masterData: state.masterData || [],
     servicesData: state.servicesData || [],
@@ -301,8 +306,10 @@ const saveAppStateChunked = async (userId, state) => {
     isChunk2: true
   };
 
-  await setDoc(doc(db, "appState", userId), chunk1);
+  // Write chunk2 FIRST (so it's ready before the listener fires on chunk1),
+  // then write the main document.
   await setDoc(doc(db, "appState", `${userId}_chunk2`), chunk2);
+  await setDoc(doc(db, "appState", userId), chunk1);
 };
 
 // Load app state (handles both chunked and non-chunked, with legacy image migration)
