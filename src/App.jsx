@@ -10,7 +10,7 @@ import {
   Edit2, Save, ExternalLink, Clipboard, Table, Link2, Camera, FileDown, PlusCircle,
   MessageSquare, ThumbsUp, Edit3, Loader2, Bell, BellRing, Phone, Lock
 } from 'lucide-react';
-import { saveAppState, loadAppState, subscribeToAppState, saveMailerImages, saveMailerLogo, loadMailerImages, loadMailerLogo } from './firebase';
+import { saveAppState, loadAppState, subscribeToAppState, saveMailerImages, saveMailerLogo, loadMailerImages, loadMailerLogo, getRemoteState } from './firebase';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -392,11 +392,11 @@ export default function FinanceApp() {
   const [activeMenu, setActiveMenu] = useState('master');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   
-  const [masterData, setMasterData] = useState([]);
-  const [servicesData, setServicesData] = useState([]); // Services invoices (non-campaign)
-  const [ledgerEntries, setLedgerEntries] = useState([]);
-  const [receipts, setReceipts] = useState([]);
-  const [creditNotes, setCreditNotes] = useState([]);
+  const [masterData, _setMasterData] = useState([]);
+  const [servicesData, _setServicesData] = useState([]); // Services invoices (non-campaign)
+  const [ledgerEntries, _setLedgerEntries] = useState([]);
+  const [receipts, _setReceipts] = useState([]);
+  const [creditNotes, _setCreditNotes] = useState([]);
   const [selectedParty, setSelectedParty] = useState(null);
   const [selectedPartyState, setSelectedPartyState] = useState(null); // Normalized state for multi-state party filtering
   const [selectedPartyClientCode, setSelectedPartyClientCode] = useState(null); // Client Code for filtering
@@ -456,11 +456,11 @@ export default function FinanceApp() {
   });
   
   // Notifications
-  const [notifications, setNotifications] = useState([]);
+  const [notifications, _setNotifications] = useState([]);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   
   // Followups for debtors
-  const [followups, setFollowups] = useState([]);
+  const [followups, _setFollowups] = useState([]);
   const [showFollowupModal, setShowFollowupModal] = useState(false);
   const [selectedInvoiceForFollowup, setSelectedInvoiceForFollowup] = useState(null);
   const [followupForm, setFollowupForm] = useState({
@@ -505,7 +505,7 @@ export default function FinanceApp() {
   const [invoiceValues, setInvoiceValues] = useState({});
   
   // Party Master Data (with GSTIN, State, etc.)
-  const [partyMaster, setPartyMaster] = useState({});
+  const [partyMaster, _setPartyMaster] = useState({});
   
   // Historical Ledger Upload
   const [showHistoricalLedgerModal, setShowHistoricalLedgerModal] = useState(false);
@@ -782,6 +782,107 @@ export default function FinanceApp() {
   const unsubscribeRef = useRef(null);
   const lastSaveTimestampRef = useRef(null); // tracks our own last save to ignore its listener echo
   const dirtyRef = useRef(false); // true when local changes are pending save; cleared ONLY after a successful save
+  const applyingMergeRef = useRef(false); // true while programmatically applying merged/remote state (skip dirty tracking)
+  const isSavingRef = useRef(false); // serialize saves
+  // Per-collection record-level dirty tracking: { key: { changed:Set(ids), deleted:Set(ids) } }
+  const dirtySetsRef = useRef({});
+  const getDirtySets = (key) => {
+    if (!dirtySetsRef.current[key]) dirtySetsRef.current[key] = { changed: new Set(), deleted: new Set() };
+    return dirtySetsRef.current[key];
+  };
+  const anyDirty = () => Object.values(dirtySetsRef.current).some(d => d.changed.size > 0 || d.deleted.size > 0);
+
+  // Tracked setter factory for ARRAY collections (records keyed by .id).
+  // Records exactly WHICH rows this device changed/added/deleted, so saves can
+  // merge per-record instead of overwriting the whole array (which caused one
+  // user's save to erase the other user's just-added receipts/approvals).
+  const makeTrackedArraySetter = (key, rawSetter) => (updater) => {
+    rawSetter(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (!applyingMergeRef.current && Array.isArray(prev) && Array.isArray(next) && prev !== next) {
+        const d = getDirtySets(key);
+        const prevMap = new Map(prev.filter(r => r && r.id != null).map(r => [r.id, r]));
+        const nextIds = new Set();
+        for (const row of next) {
+          if (!row || row.id == null) continue;
+          nextIds.add(row.id);
+          const old = prevMap.get(row.id);
+          if (!old || old !== row) { d.changed.add(row.id); d.deleted.delete(row.id); }
+        }
+        for (const id of prevMap.keys()) {
+          if (!nextIds.has(id)) { d.deleted.add(id); d.changed.delete(id); }
+        }
+        dirtyRef.current = true;
+      }
+      return next;
+    });
+  };
+
+  // Tracked setter for OBJECT collections (keyed maps like partyMaster)
+  const makeTrackedObjectSetter = (key, rawSetter) => (updater) => {
+    rawSetter(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (!applyingMergeRef.current && prev && next && typeof prev === 'object' && typeof next === 'object' && prev !== next) {
+        const d = getDirtySets(key);
+        for (const k of Object.keys(next)) {
+          if (prev[k] !== next[k]) { d.changed.add(k); d.deleted.delete(k); }
+        }
+        for (const k of Object.keys(prev)) {
+          if (!(k in next)) { d.deleted.add(k); d.changed.delete(k); }
+        }
+        dirtyRef.current = true;
+      }
+      return next;
+    });
+  };
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const setMasterData = useCallback(makeTrackedArraySetter('masterData', _setMasterData), []);
+  const setServicesData = useCallback(makeTrackedArraySetter('servicesData', _setServicesData), []);
+  const setLedgerEntries = useCallback(makeTrackedArraySetter('ledgerEntries', _setLedgerEntries), []);
+  const setReceipts = useCallback(makeTrackedArraySetter('receipts', _setReceipts), []);
+  const setCreditNotes = useCallback(makeTrackedArraySetter('creditNotes', _setCreditNotes), []);
+  const setNotifications = useCallback(makeTrackedArraySetter('notifications', _setNotifications), []);
+  const setFollowups = useCallback(makeTrackedArraySetter('followups', _setFollowups), []);
+  const setPartyMaster = useCallback(makeTrackedObjectSetter('partyMaster', _setPartyMaster), []);
+  /* eslint-enable react-hooks/exhaustive-deps */
+
+  // Merge helper: remote array as base, overlay OUR changed rows, drop OUR deleted rows.
+  // Rows changed/added by other devices survive untouched.
+  const mergeArrayWithRemote = (key, localArr, remoteArr) => {
+    const local = Array.isArray(localArr) ? localArr : [];
+    if (!Array.isArray(remoteArr)) return local;
+    const d = getDirtySets(key);
+    if (d.changed.size === 0 && d.deleted.size === 0) return remoteArr;
+    const localMap = new Map(local.filter(r => r && r.id != null).map(r => [r.id, r]));
+    const out = [];
+    const seen = new Set();
+    for (const row of remoteArr) {
+      const id = row?.id;
+      if (id != null && d.deleted.has(id)) continue;                 // we deleted it
+      if (id != null && d.changed.has(id) && localMap.has(id)) {     // we changed it
+        out.push(localMap.get(id)); seen.add(id);
+      } else {
+        out.push(row); if (id != null) seen.add(id);
+      }
+    }
+    for (const row of local) {                                       // our new rows
+      const id = row?.id;
+      if (id != null && d.changed.has(id) && !seen.has(id)) out.push(row);
+    }
+    return out;
+  };
+
+  const mergeObjectWithRemote = (key, localObj, remoteObj) => {
+    const local = (localObj && typeof localObj === 'object') ? localObj : {};
+    if (!remoteObj || typeof remoteObj !== 'object') return local;
+    const d = getDirtySets(key);
+    if (d.changed.size === 0 && d.deleted.size === 0) return remoteObj;
+    const out = { ...remoteObj };
+    for (const k of d.changed) if (k in local) out[k] = local[k];
+    for (const k of d.deleted) delete out[k];
+    return out;
+  };
   
   // Load data from Firebase on login
   const loadDataFromFirebase = async () => {
@@ -791,6 +892,8 @@ export default function FinanceApp() {
     try {
       const data = await loadAppState('indreesh-media');
       if (data) {
+        // Initial load applies SERVER state — must not be tracked as local changes
+        applyingMergeRef.current = true;
         // Arrays - ensure they're actually arrays
         if (Array.isArray(data.masterData) && data.masterData.length > 0) setMasterData(data.masterData);
         if (Array.isArray(data.servicesData)) setServicesData(data.servicesData);
@@ -844,6 +947,7 @@ export default function FinanceApp() {
     // CRITICAL: Enable auto-save AFTER a delay to ensure all setState calls have completed
     setTimeout(() => {
       dataLoadedRef.current = true;
+      applyingMergeRef.current = false; // initial-load state application finished
       console.log('✅ Auto-save enabled (data loaded)');
     }, 3000); // 3 second delay to let all state settle
   };
@@ -857,7 +961,6 @@ export default function FinanceApp() {
     }
     
     // If we're mid-receiving a real-time update, DEFER the save (retry shortly).
-    // Previously this silently dropped the save → local changes were lost on refresh.
     if (isReceivingUpdateRef.current) {
       console.log('⏳ Deferring save - receiving server update (will retry)');
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -865,51 +968,112 @@ export default function FinanceApp() {
       return;
     }
 
+    // Serialize: if a save is already in flight, retry after it finishes
+    if (isSavingRef.current) {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 1000);
+      return;
+    }
+
+    isSavingRef.current = true;
     setIsSaving(true);
     try {
-      // Debug: Log what we're saving
-      console.log('Saving to Firebase:', {
-        masterDataCount: masterData?.length,
-        servicesDataCount: servicesData?.length,
-        receiptsCount: receipts?.length,
-        creditNotesCount: creditNotes?.length
+      // Snapshot WHICH records we changed, so edits made during this async save
+      // aren't accidentally cleared from tracking afterwards
+      const snapshot = {};
+      for (const key of Object.keys(dirtySetsRef.current)) {
+        const d = dirtySetsRef.current[key];
+        snapshot[key] = { changed: new Set(d.changed), deleted: new Set(d.deleted) };
+      }
+
+      // ============ MERGE-ON-SAVE (multi-user safe) ============
+      // Fetch the LATEST remote state and merge our changed records on top of it.
+      // This way, records another user added/changed since our last sync survive —
+      // previously each save overwrote the entire state (last-writer-wins), which
+      // erased the other user's receipts/approvals/billing marks.
+      const remote = await getRemoteState('indreesh-media');
+
+      const mergedMasterData = mergeArrayWithRemote('masterData', masterData, remote?.masterData);
+      const mergedServicesData = mergeArrayWithRemote('servicesData', servicesData, remote?.servicesData);
+      const mergedLedgerEntries = mergeArrayWithRemote('ledgerEntries', ledgerEntries, remote?.ledgerEntries);
+      const mergedReceipts = mergeArrayWithRemote('receipts', receipts, remote?.receipts);
+      const mergedCreditNotes = mergeArrayWithRemote('creditNotes', creditNotes, remote?.creditNotes);
+      const mergedNotifications = mergeArrayWithRemote('notifications', notifications, remote?.notifications);
+      const mergedFollowups = mergeArrayWithRemote('followups', followups, remote?.followups);
+      const mergedPartyMaster = mergeObjectWithRemote('partyMaster', partyMaster, remote?.partyMaster);
+
+      // Counters: always take the MAX of local and remote so two devices never
+      // hand out the same invoice/receipt number
+      const mergedNextInvoiceNo = Math.max(nextInvoiceNo || 1, remote?.nextInvoiceNo || 1);
+      const mergedNextCombineNo = Math.max(nextCombineNo || 1, remote?.nextCombineNo || 1);
+      const mergedNextReceiptNo = Math.max(nextReceiptNo || 1, remote?.nextReceiptNo || 1);
+      const mergedNextCreditNoteNo = Math.max(nextCreditNoteNo || 1, remote?.nextCreditNoteNo || 1);
+      const mergedNextServiceInvoiceNo = Math.max(nextServiceInvoiceNo || 1, remote?.nextServiceInvoiceNo || 1);
+
+      console.log('Saving to Firebase (merged):', {
+        masterDataCount: mergedMasterData?.length,
+        servicesDataCount: mergedServicesData?.length,
+        receiptsCount: mergedReceipts?.length,
+        creditNotesCount: mergedCreditNotes?.length
       });
-      
-      // NOTE: mailerImages and mailerLogo are NOT included here
-      // They are saved separately to their own Firestore collections
-      // to avoid the 1MB document size limit
+
       const savedTs = await saveAppState('indreesh-media', {
-        masterData,
-        servicesData,
-        ledgerEntries,
-        receipts,
-        creditNotes,
+        masterData: mergedMasterData,
+        servicesData: mergedServicesData,
+        ledgerEntries: mergedLedgerEntries,
+        receipts: mergedReceipts,
+        creditNotes: mergedCreditNotes,
         openingBalances,
-        // mailerImages - REMOVED: saved separately via saveMailerImages()
-        // mailerLogo - REMOVED: saved separately via saveMailerLogo()
+        // mailerImages/mailerLogo - saved separately (1MB limit)
         companyConfig,
-        nextInvoiceNo,
-        nextCombineNo,
-        nextReceiptNo,
-        nextCreditNoteNo,
-        nextServiceInvoiceNo,
+        nextInvoiceNo: mergedNextInvoiceNo,
+        nextCombineNo: mergedNextCombineNo,
+        nextReceiptNo: mergedNextReceiptNo,
+        nextCreditNoteNo: mergedNextCreditNoteNo,
+        nextServiceInvoiceNo: mergedNextServiceInvoiceNo,
         invoiceValues,
-        notifications,
+        notifications: mergedNotifications,
         whatsappSettings,
-        partyMaster,
-        followups,
+        partyMaster: mergedPartyMaster,
+        followups: mergedFollowups,
         userPasswords
       });
       if (savedTs) lastSaveTimestampRef.current = savedTs;
-      dirtyRef.current = false; // local changes are now safely persisted
+
+      // Apply the merged result locally so we also SEE the other user's records
+      applyingMergeRef.current = true;
+      _setMasterData(mergedMasterData);
+      _setServicesData(mergedServicesData);
+      _setLedgerEntries(mergedLedgerEntries);
+      _setReceipts(mergedReceipts);
+      _setCreditNotes(mergedCreditNotes);
+      _setNotifications(mergedNotifications);
+      _setFollowups(mergedFollowups);
+      _setPartyMaster(mergedPartyMaster);
+      setNextInvoiceNo(mergedNextInvoiceNo);
+      setNextCombineNo(mergedNextCombineNo);
+      setNextReceiptNo(mergedNextReceiptNo);
+      setNextCreditNoteNo(mergedNextCreditNoteNo);
+      setNextServiceInvoiceNo(mergedNextServiceInvoiceNo);
+      setTimeout(() => { applyingMergeRef.current = false; }, 0);
+
+      // Clear ONLY the record-ids we actually saved (snapshot); anything the user
+      // touched during the await stays tracked for the next save
+      for (const key of Object.keys(snapshot)) {
+        const d = getDirtySets(key);
+        for (const id of snapshot[key].changed) d.changed.delete(id);
+        for (const id of snapshot[key].deleted) d.deleted.delete(id);
+      }
+      dirtyRef.current = anyDirty();
       setLastSaved(new Date());
-      console.log('✅ App state saved to Firebase');
+      console.log('✅ App state saved to Firebase (per-record merge)');
     } catch (error) {
       console.error('❌ Error saving data:', error);
-      // Changes are still unsaved (dirty stays true) — retry so they're not stranded
+      // Changes are still unsaved (dirty tracking intact) — retry so they're not stranded
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 5000);
     }
+    isSavingRef.current = false;
     setIsSaving(false);
   }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords]);
 
@@ -1243,43 +1407,35 @@ export default function FinanceApp() {
         return;
       }
       
-      // If we have UNSAVED local changes, do NOT apply the remote snapshot —
-      // it would wipe them from memory before they ever get saved (e.g. your
-      // new receipt vanishing because a colleague's save arrived first).
-      // Our debounced save will run shortly; its own echo-skip plus the next
-      // remote update will bring us back in sync.
-      if (dirtyRef.current) {
-        console.log('⏸️ Remote update held - local changes pending save');
-        return;
-      }
-      
       // Debug: Log what data we're receiving from Firebase
       console.log('Firebase data received:', {
         hasMasterData: Array.isArray(data.masterData) ? data.masterData.length : 'not array',
         hasServicesData: Array.isArray(data.servicesData) ? data.servicesData.length : 'not array',
-        servicesDataRaw: data.servicesData,
         hasReceipts: Array.isArray(data.receipts) ? data.receipts.length : 'not array',
         hasCreditNotes: Array.isArray(data.creditNotes) ? data.creditNotes.length : 'not array'
       });
       
       // Mark that we're receiving an update to avoid save loop
       isReceivingUpdateRef.current = true;
+      applyingMergeRef.current = true;
       
-      // Arrays - ensure they're actually arrays
-      if (Array.isArray(data.masterData)) setMasterData(data.masterData);
-      if (Array.isArray(data.servicesData)) setServicesData(data.servicesData);
-      if (Array.isArray(data.ledgerEntries)) setLedgerEntries(data.ledgerEntries);
-      if (Array.isArray(data.receipts)) setReceipts(data.receipts);
-      if (Array.isArray(data.creditNotes)) setCreditNotes(data.creditNotes);
-      if (Array.isArray(data.notifications)) setNotifications(data.notifications);
-      if (Array.isArray(data.followups)) setFollowups(data.followups);
+      // MERGE remote into local instead of replacing: the remote snapshot is
+      // the base, but any records WE changed that aren't saved yet stay on top.
+      // This means a colleague's save can no longer wipe your just-added
+      // receipt/approval from memory, and their records appear immediately.
+      if (Array.isArray(data.masterData)) _setMasterData(prev => mergeArrayWithRemote('masterData', prev, data.masterData));
+      if (Array.isArray(data.servicesData)) _setServicesData(prev => mergeArrayWithRemote('servicesData', prev, data.servicesData));
+      if (Array.isArray(data.ledgerEntries)) _setLedgerEntries(prev => mergeArrayWithRemote('ledgerEntries', prev, data.ledgerEntries));
+      if (Array.isArray(data.receipts)) _setReceipts(prev => mergeArrayWithRemote('receipts', prev, data.receipts));
+      if (Array.isArray(data.creditNotes)) _setCreditNotes(prev => mergeArrayWithRemote('creditNotes', prev, data.creditNotes));
+      if (Array.isArray(data.notifications)) _setNotifications(prev => mergeArrayWithRemote('notifications', prev, data.notifications));
+      if (Array.isArray(data.followups)) _setFollowups(prev => mergeArrayWithRemote('followups', prev, data.followups));
       
       // Objects - ensure they're actually objects
       if (data.openingBalances && typeof data.openingBalances === 'object' && !Array.isArray(data.openingBalances)) setOpeningBalances(data.openingBalances);
       // IMPORTANT: Do NOT set mailerImages or mailerLogo from real-time listener!
       // They are managed separately (loaded once on init, saved to separate collection).
-      // Setting them here causes a race condition that wipes images.
-      if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) setPartyMaster(data.partyMaster);
+      if (data.partyMaster && typeof data.partyMaster === 'object' && !Array.isArray(data.partyMaster)) _setPartyMaster(prev => mergeObjectWithRemote('partyMaster', prev, data.partyMaster));
       if (data.userPasswords && typeof data.userPasswords === 'object' && !Array.isArray(data.userPasswords)) setUserPasswords(data.userPasswords);
       
       // Other types - NO mailerLogo here (managed separately)
@@ -1290,26 +1446,29 @@ export default function FinanceApp() {
         name: 'Indreesh Media LLP',
         bank: { ...(data.companyConfig.bank || prev.bank), holder: 'Indreesh Media LLP' }
       }));
-      if (data.nextInvoiceNo) setNextInvoiceNo(data.nextInvoiceNo);
-      if (data.nextCombineNo) setNextCombineNo(data.nextCombineNo);
-      if (data.nextReceiptNo) setNextReceiptNo(data.nextReceiptNo);
-      if (data.nextCreditNoteNo) setNextCreditNoteNo(data.nextCreditNoteNo);
+      // Counters: never go backwards — take the max of local and remote so two
+      // devices can't hand out duplicate invoice/receipt numbers
+      if (data.nextInvoiceNo) setNextInvoiceNo(prev => Math.max(prev || 1, data.nextInvoiceNo));
+      if (data.nextCombineNo) setNextCombineNo(prev => Math.max(prev || 1, data.nextCombineNo));
+      if (data.nextReceiptNo) setNextReceiptNo(prev => Math.max(prev || 1, data.nextReceiptNo));
+      if (data.nextCreditNoteNo) setNextCreditNoteNo(prev => Math.max(prev || 1, data.nextCreditNoteNo));
       // Migration: If nextServiceInvoiceNo exists and is higher, use it as the unified counter
       if (data.nextServiceInvoiceNo) {
-        setNextServiceInvoiceNo(data.nextServiceInvoiceNo);
+        setNextServiceInvoiceNo(prev => Math.max(prev || 1, data.nextServiceInvoiceNo));
         if (data.nextServiceInvoiceNo > (data.nextInvoiceNo || 1)) {
-          setNextInvoiceNo(data.nextServiceInvoiceNo);
+          setNextInvoiceNo(prev => Math.max(prev || 1, data.nextServiceInvoiceNo));
         }
       }
       if (data.invoiceValues) setInvoiceValues(data.invoiceValues);
       if (data.whatsappSettings) setWhatsappSettings(prev => ({ ...prev, ...data.whatsappSettings }));
       
-      // Reset flag after a short delay
+      // Reset flags after a short delay
       setTimeout(() => {
         isReceivingUpdateRef.current = false;
+        applyingMergeRef.current = false;
       }, 500);
       
-      console.log('Real-time sync: Data updated from Firebase');
+      console.log('Real-time sync: merged update from Firebase (unsaved local changes preserved)');
     });
     
     return () => {

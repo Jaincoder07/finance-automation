@@ -377,6 +377,25 @@ export const loadAppState = async (userId) => {
   }
 };
 
+// Lightweight fetch of the current remote state (main doc + chunk2 if chunked),
+// WITHOUT loading images. Used by the merge-on-save logic to combine this
+// device's changes with the latest server data instead of overwriting it.
+export const getRemoteState = async (userId) => {
+  try {
+    const docSnap = await getDoc(doc(db, "appState", userId));
+    if (!docSnap.exists()) return null;
+    let data = docSnap.data();
+    if (data.isChunked) {
+      const chunk2Snap = await getDoc(doc(db, "appState", `${userId}_chunk2`));
+      if (chunk2Snap.exists()) data = { ...data, ...chunk2Snap.data() };
+    }
+    return data;
+  } catch (error) {
+    console.error("Error fetching remote state:", error);
+    return null;
+  }
+};
+
 // Real-time listener for app state changes
 // NOTE: Does NOT handle mailerImages/mailerLogo - those are loaded once on init
 // and saved separately to avoid race conditions
