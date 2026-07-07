@@ -781,6 +781,7 @@ export default function FinanceApp() {
   const isReceivingUpdateRef = useRef(false);
   const unsubscribeRef = useRef(null);
   const lastSaveTimestampRef = useRef(null); // tracks our own last save to ignore its listener echo
+  const dirtyRef = useRef(false); // true when local changes are pending save; cleared ONLY after a successful save
   
   // Load data from Firebase on login
   const loadDataFromFirebase = async () => {
@@ -847,7 +848,7 @@ export default function FinanceApp() {
     }, 3000); // 3 second delay to let all state settle
   };
 
-  // Save data to Firebase (debounced) - FIXED: guards against race condition
+  // Save data to Firebase (debounced) - FIXED: never silently drops a pending save
   const saveDataToFirebase = useCallback(async () => {
     // CRITICAL: Do NOT save if data hasn't been loaded yet (prevents wiping data on app start)
     if (!dataLoadedRef.current) {
@@ -855,9 +856,12 @@ export default function FinanceApp() {
       return;
     }
     
-    // CRITICAL: Do NOT save if we're receiving a real-time update from Firebase
+    // If we're mid-receiving a real-time update, DEFER the save (retry shortly).
+    // Previously this silently dropped the save → local changes were lost on refresh.
     if (isReceivingUpdateRef.current) {
-      console.log('⏳ Skipping save - receiving server update');
+      console.log('⏳ Deferring save - receiving server update (will retry)');
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 700);
       return;
     }
 
@@ -897,31 +901,50 @@ export default function FinanceApp() {
         userPasswords
       });
       if (savedTs) lastSaveTimestampRef.current = savedTs;
+      dirtyRef.current = false; // local changes are now safely persisted
       setLastSaved(new Date());
       console.log('✅ App state saved to Firebase');
     } catch (error) {
       console.error('❌ Error saving data:', error);
+      // Changes are still unsaved (dirty stays true) — retry so they're not stranded
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 5000);
     }
     setIsSaving(false);
   }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords]);
 
-  // Auto-save app state when data changes (debounced 3 seconds) - FIXED with dataLoadedRef guard
+  // Auto-save app state when data changes (debounced 3 seconds)
+  // FIXED: a pending local change is NEVER dropped — only deferred.
+  // Previously, a real-time update from another device re-ran this effect,
+  // the cleanup cancelled the pending save timer, and the early return
+  // never rescheduled it → the local change (receipt/approval/billing mark)
+  // silently stayed unsaved and vanished on refresh.
   useEffect(() => {
     if (!isLoggedIn || !dataLoadedRef.current) return;
     
-    // Skip save if we're receiving an update from Firebase (to avoid loop)
-    if (isReceivingUpdateRef.current) return;
+    if (isReceivingUpdateRef.current) {
+      // This effect run was triggered by a server update, not a local edit.
+      // Do NOT mark dirty. But if a local change is still awaiting save,
+      // RESCHEDULE it instead of letting the cleanup drop it.
+      if (dirtyRef.current) {
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 3000);
+      }
+      return;
+    }
+    
+    // Local change → mark dirty and (re)schedule the save
+    dirtyRef.current = true;
     
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
     
     saveTimeoutRef.current = setTimeout(() => {
-      // Double-check we're not in a receiving state and data is loaded
-      if (!isReceivingUpdateRef.current && dataLoadedRef.current) {
-        saveDataToFirebase();
+      if (dataLoadedRef.current) {
+        saveDataToFirebase(); // internally defers+retries if a server update is mid-flight
       }
-    }, 3000); // 3 second debounce (increased from 1s for stability)
+    }, 3000); // 3 second debounce
     
     return () => {
       if (saveTimeoutRef.current) {
@@ -929,6 +952,21 @@ export default function FinanceApp() {
       }
     };
   }, [masterData, servicesData, ledgerEntries, receipts, creditNotes, openingBalances, companyConfig, nextInvoiceNo, nextCombineNo, nextReceiptNo, nextCreditNoteNo, nextServiceInvoiceNo, invoiceValues, notifications, whatsappSettings, partyMaster, followups, userPasswords, isLoggedIn, saveDataToFirebase]);
+
+  // Warn before closing/refreshing while changes are still unsaved.
+  // The debounced save waits up to 3s; without this, a quick refresh
+  // right after an edit silently loses it.
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (dirtyRef.current || isSaving) {
+        e.preventDefault();
+        e.returnValue = 'Changes are still being saved. Leave anyway?';
+        return e.returnValue;
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isSaving]);
 
   // SEPARATE auto-save for mailer images (debounced 5 seconds, saves to separate Firestore collection)
   // This avoids the 1MB Firestore document limit that was causing images to vanish
@@ -1202,6 +1240,16 @@ export default function FinanceApp() {
       // listener back with the same data; processing it can overwrite fresh
       // local state (e.g. a just-uploaded ledger mid-save). Skip if timestamps match.
       if (data.updatedAt && data.updatedAt === lastSaveTimestampRef.current) {
+        return;
+      }
+      
+      // If we have UNSAVED local changes, do NOT apply the remote snapshot —
+      // it would wipe them from memory before they ever get saved (e.g. your
+      // new receipt vanishing because a colleague's save arrived first).
+      // Our debounced save will run shortly; its own echo-skip plus the next
+      // remote update will bring us back in sync.
+      if (dirtyRef.current) {
+        console.log('⏸️ Remote update held - local changes pending save');
         return;
       }
       
