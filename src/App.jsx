@@ -330,6 +330,7 @@ export default function FinanceApp() {
   const [loginError, setLoginError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [lastSaved, setLastSaved] = useState(null);
   
   // User credentials - passwords can be changed by users
@@ -1038,7 +1039,13 @@ export default function FinanceApp() {
         followups: mergedFollowups,
         userPasswords
       });
-      if (savedTs) lastSaveTimestampRef.current = savedTs;
+      if (!savedTs) {
+        // Firebase rejected the write. Do NOT clear tracking or claim success —
+        // this exact silent failure is how data was vanishing before.
+        throw new Error('Firebase rejected the save');
+      }
+      lastSaveTimestampRef.current = savedTs;
+      setSaveError(false);
 
       // Apply the merged result locally so we also SEE the other user's records
       applyingMergeRef.current = true;
@@ -1070,6 +1077,7 @@ export default function FinanceApp() {
     } catch (error) {
       console.error('❌ Error saving data:', error);
       // Changes are still unsaved (dirty tracking intact) — retry so they're not stranded
+      setSaveError(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => saveDataToFirebase(), 5000);
     }
@@ -3848,7 +3856,11 @@ ${generateInvoiceHtml(row)}
         {/* Save Status */}
         {!sidebarCollapsed && (
           <div style={{ padding: '8px 16px', borderBottom: '1px solid #334155', fontSize: '11px' }}>
-            {isSaving ? (
+            {saveError ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#FCA5A5', fontWeight: '700' }}>
+                <span>⚠️ Save Failed — retrying…</span>
+              </div>
+            ) : isSaving ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#FCD34D' }}>
                 <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
                 <span>Saving...</span>

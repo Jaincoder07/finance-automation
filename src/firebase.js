@@ -212,6 +212,123 @@ export const loadMailerLogo = async (userId) => {
 // Images are stored separately to avoid 1MB limit
 // ============================================
 
+// ============================================
+// CHUNKED STORAGE V2 - splits each large collection across AS MANY documents
+// as needed (~700KB each), instead of a fixed two-document split.
+// The old design failed HARD once chunk2 (ledgers+receipts+...) alone crossed
+// Firestore's 1MB/document limit: every save was rejected and silently lost.
+// ============================================
+
+const CHUNK_LIMIT = 700000; // ~700KB per part, safe margin under Firestore's 1MB
+const CHUNKABLE_COLLECTIONS = ['masterData', 'servicesData', 'ledgerEntries', 'receipts', 'creditNotes', 'notifications', 'followups'];
+
+// Split an array into parts, each under CHUNK_LIMIT when JSON-serialized
+const splitIntoParts = (arr) => {
+  const parts = [];
+  let current = [];
+  let currentSize = 2;
+  for (const item of (Array.isArray(arr) ? arr : [])) {
+    let itemSize = 2;
+    try { itemSize = JSON.stringify(item)?.length || 2; } catch (e) { continue; }
+    if (currentSize + itemSize > CHUNK_LIMIT && current.length > 0) {
+      parts.push(current);
+      current = [];
+      currentSize = 2;
+    }
+    current.push(item);
+    currentSize += itemSize + 1;
+  }
+  parts.push(current); // always at least one part (possibly empty)
+  return parts;
+};
+
+const saveAppStateChunkedV2 = async (userId, state) => {
+  const saveId = state.updatedAt;
+  const chunkMap = {};
+  const writes = [];
+
+  for (const col of CHUNKABLE_COLLECTIONS) {
+    const parts = splitIntoParts(state[col]);
+    chunkMap[col] = parts.length;
+    parts.forEach((items, i) => {
+      writes.push(setDoc(doc(db, "appState", `${userId}__${col}_${i}`), {
+        items, saveId, part: i, col, updatedAt: state.updatedAt
+      }));
+    });
+    // Best-effort cleanup of one stale extra part from a previous larger save
+    writes.push(deleteDoc(doc(db, "appState", `${userId}__${col}_${parts.length}`)).catch(() => {}));
+  }
+
+  // Write ALL parts FIRST...
+  await Promise.all(writes);
+
+  // ...then the meta document LAST, so when listeners fire the parts are ready
+  const meta = {
+    openingBalances: state.openingBalances || {},
+    companyConfig: state.companyConfig || {},
+    nextInvoiceNo: state.nextInvoiceNo || 1,
+    nextCombineNo: state.nextCombineNo || 1,
+    nextReceiptNo: state.nextReceiptNo || 1,
+    nextCreditNoteNo: state.nextCreditNoteNo || 1,
+    nextServiceInvoiceNo: state.nextServiceInvoiceNo || 1,
+    invoiceValues: state.invoiceValues || {},
+    emailSettings: state.emailSettings || {},
+    whatsappSettings: state.whatsappSettings || {},
+    partyMaster: state.partyMaster || {},
+    userPasswords: state.userPasswords || {},
+    updatedAt: state.updatedAt,
+    saveId,
+    isChunkedV2: true,
+    chunkMap
+  };
+  await setDoc(doc(db, "appState", userId), meta);
+};
+
+// Rebuild full state from meta + part documents (with one consistency retry)
+const hydrateChunksV2 = async (userId, meta) => {
+  const out = { ...meta };
+  const cols = Object.keys(meta.chunkMap || {});
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let consistent = true;
+    await Promise.all(cols.map(async (col) => {
+      const n = meta.chunkMap[col] || 0;
+      const snaps = await Promise.all(
+        Array.from({ length: n }, (_, i) => getDoc(doc(db, "appState", `${userId}__${col}_${i}`)))
+      );
+      const items = [];
+      for (const s of snaps) {
+        if (!s.exists() || s.data().saveId !== meta.saveId) {
+          consistent = false;
+          if (s.exists()) items.push(...(s.data().items || []));
+        } else {
+          items.push(...(s.data().items || []));
+        }
+      }
+      out[col] = items;
+    }));
+    if (consistent) break;
+    // A newer save may still be landing its parts — brief retry
+    await new Promise(r => setTimeout(r, 400));
+  }
+  return out;
+};
+
+// Read the complete current state (handles V2 chunked, legacy chunked, and plain)
+const readFullState = async (userId) => {
+  const docSnap = await getDoc(doc(db, "appState", userId));
+  if (!docSnap.exists()) return null;
+  let data = docSnap.data();
+
+  if (data.isChunkedV2) {
+    data = await hydrateChunksV2(userId, data);
+  } else if (data.isChunked) {
+    // Legacy two-chunk format
+    const chunk2Snap = await getDoc(doc(db, "appState", `${userId}_chunk2`));
+    if (chunk2Snap.exists()) data = { ...data, ...chunk2Snap.data() };
+  }
+  return data;
+};
+
 export const saveAppState = async (userId, state) => {
   const updatedAt = new Date().toISOString();
   // Build the state object WITHOUT images and logo (they're stored separately)
@@ -241,27 +358,25 @@ export const saveAppState = async (userId, state) => {
   };
 
   try {
-    // Check estimated size before saving
     const stateStr = JSON.stringify(stateToSave);
     const estimatedSize = new Blob([stateStr]).size;
     
-    if (estimatedSize > 900000) {
-      // If state is still too large (close to 1MB), save in chunks
-      console.warn(`State size is ${(estimatedSize / 1024).toFixed(0)}KB - splitting into chunks`);
-      await saveAppStateChunked(userId, stateToSave);
+    if (estimatedSize > 800000) {
+      // Large state → dynamic multi-part save (no per-collection size ceiling)
+      console.warn(`State size is ${(estimatedSize / 1024).toFixed(0)}KB - using multi-part chunked save`);
+      await saveAppStateChunkedV2(userId, stateToSave);
     } else {
-      // Not chunked: ensure any stale chunk2 doc doesn't shadow this save on load
       await setDoc(doc(db, "appState", userId), stateToSave);
     }
 
     return updatedAt;
   } catch (error) {
     console.error("Error saving app state:", error);
-    // If save fails due to size, try chunked save
+    // If save fails due to size, fall back to multi-part chunked save
     if (error.code === 'invalid-argument' || error.message?.includes('exceeds the maximum')) {
-      console.warn("Document too large, falling back to chunked save...");
+      console.warn("Document too large, falling back to multi-part chunked save...");
       try {
-        await saveAppStateChunked(userId, stateToSave);
+        await saveAppStateChunkedV2(userId, stateToSave);
         return updatedAt;
       } catch (chunkError) {
         console.error("Chunked save also failed:", chunkError);
@@ -271,63 +386,11 @@ export const saveAppState = async (userId, state) => {
   }
 };
 
-// Chunked save for when main state exceeds 1MB.
-// IMPORTANT: chunk2 (which holds ledgerEntries, receipts, etc.) is written FIRST,
-// so that when the main-document write triggers the real-time listener, chunk2 is
-// already up to date. Writing chunk1 first caused a race where the listener read a
-// stale chunk2 and overwrote freshly-saved data (e.g. just-uploaded ledgers).
-const saveAppStateChunked = async (userId, state) => {
-  const chunk1 = {
-    masterData: state.masterData || [],
-    servicesData: state.servicesData || [],
-    companyConfig: state.companyConfig || {},
-    nextInvoiceNo: state.nextInvoiceNo || 1,
-    nextCombineNo: state.nextCombineNo || 1,
-    nextReceiptNo: state.nextReceiptNo || 1,
-    nextCreditNoteNo: state.nextCreditNoteNo || 1,
-    nextServiceInvoiceNo: state.nextServiceInvoiceNo || 1,
-    emailSettings: state.emailSettings || {},
-    whatsappSettings: state.whatsappSettings || {},
-    userPasswords: state.userPasswords || {},
-    updatedAt: state.updatedAt,
-    isChunked: true
-  };
-
-  const chunk2 = {
-    ledgerEntries: state.ledgerEntries || [],
-    receipts: state.receipts || [],
-    creditNotes: state.creditNotes || [],
-    openingBalances: state.openingBalances || {},
-    invoiceValues: state.invoiceValues || {},
-    partyMaster: state.partyMaster || {},
-    notifications: state.notifications || [],
-    followups: state.followups || [],
-    updatedAt: state.updatedAt,
-    isChunk2: true
-  };
-
-  // Write chunk2 FIRST (so it's ready before the listener fires on chunk1),
-  // then write the main document.
-  await setDoc(doc(db, "appState", `${userId}_chunk2`), chunk2);
-  await setDoc(doc(db, "appState", userId), chunk1);
-};
-
 // Load app state (handles both chunked and non-chunked, with legacy image migration)
 export const loadAppState = async (userId) => {
   try {
-    const docSnap = await getDoc(doc(db, "appState", userId));
-    if (!docSnap.exists()) return null;
-
-    let data = docSnap.data();
-
-    // If data was saved in chunks, load chunk2 as well
-    if (data.isChunked) {
-      const chunk2Snap = await getDoc(doc(db, "appState", `${userId}_chunk2`));
-      if (chunk2Snap.exists()) {
-        const chunk2Data = chunk2Snap.data();
-        data = { ...data, ...chunk2Data };
-      }
-    }
+    let data = await readFullState(userId);
+    if (!data) return null;
 
     // Load images from separate collections (new format)
     let mailerImages = await loadMailerImages(userId);
@@ -377,19 +440,11 @@ export const loadAppState = async (userId) => {
   }
 };
 
-// Lightweight fetch of the current remote state (main doc + chunk2 if chunked),
-// WITHOUT loading images. Used by the merge-on-save logic to combine this
-// device's changes with the latest server data instead of overwriting it.
+// Lightweight fetch of the current remote state (all chunk formats),
+// WITHOUT loading images. Used by the merge-on-save logic.
 export const getRemoteState = async (userId) => {
   try {
-    const docSnap = await getDoc(doc(db, "appState", userId));
-    if (!docSnap.exists()) return null;
-    let data = docSnap.data();
-    if (data.isChunked) {
-      const chunk2Snap = await getDoc(doc(db, "appState", `${userId}_chunk2`));
-      if (chunk2Snap.exists()) data = { ...data, ...chunk2Snap.data() };
-    }
-    return data;
+    return await readFullState(userId);
   } catch (error) {
     console.error("Error fetching remote state:", error);
     return null;
@@ -405,12 +460,12 @@ export const subscribeToAppState = (userId, callback) => {
     if (docSnapshot.exists()) {
       let data = docSnapshot.data();
       
-      // If chunked, also load chunk2
-      if (data.isChunked) {
+      // Rebuild full state for whichever chunk format is in use
+      if (data.isChunkedV2) {
+        data = await hydrateChunksV2(userId, data);
+      } else if (data.isChunked) {
         const chunk2Snap = await getDoc(doc(db, "appState", `${userId}_chunk2`));
-        if (chunk2Snap.exists()) {
-          data = { ...data, ...chunk2Snap.data() };
-        }
+        if (chunk2Snap.exists()) data = { ...data, ...chunk2Snap.data() };
       }
 
       // DO NOT load or pass mailerImages/mailerLogo here.
